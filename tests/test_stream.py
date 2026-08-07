@@ -33,18 +33,18 @@ async def test_working_precedes_completion(client, simple_prompt):
     assert capture.states.index("working") < capture.states.index("completed")
 
 
-async def test_response_artifact_carries_the_reply(client, simple_prompt):
+async def test_response_artifact_carries_the_reply(client, simple_prompt, reply_marker):
     capture = await send(client, simple_prompt)
 
-    assert simple_prompt in capture.artifact_text()
+    assert reply_marker in capture.artifact_text()
 
 
-async def test_artifacts_may_arrive_chunked(client, simple_prompt):
+async def test_artifacts_may_arrive_chunked(client, simple_prompt, reply_marker):
     """Artifact text is assembled from N updates; tests must join, not index."""
     capture = await send(client, simple_prompt)
 
     assert capture.artifacts, "expected at least one artifact update"
-    assert simple_prompt in capture.artifact_text()
+    assert reply_marker in capture.artifact_text()
 
 
 async def test_tool_activity_surfaces_as_status_text(client, simple_prompt, tool_marker):

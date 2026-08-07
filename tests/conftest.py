@@ -111,8 +111,26 @@ async def client(server_url, http_client):
 
 @pytest.fixture
 def simple_prompt(backend) -> str:
-    """A prompt whose text comes back in the response artifact."""
-    return "hello world"
+    """A prompt that runs to completion without a permission gate."""
+    if backend == "echo":
+        return "hello world"
+    if backend == "playback":
+        return "hello there"
+    raise NotImplementedError(f"no simple prompt for backend {backend!r}")
+
+
+@pytest.fixture
+def reply_marker(backend, simple_prompt) -> str:
+    """Text `simple_prompt` should produce in the response artifact.
+
+    Separate from the prompt because only echo parrots its input; a scripted
+    agent answers with whatever the scenario says.
+    """
+    if backend == "echo":
+        return simple_prompt
+    if backend == "playback":
+        return "Ready when you are"
+    raise NotImplementedError(f"no reply marker for backend {backend!r}")
 
 
 @pytest.fixture
@@ -120,6 +138,8 @@ def permission_prompt(backend) -> str:
     """A prompt that parks the task on a tool-permission request."""
     if backend == "echo":
         return "sudo rm -rf /tmp/nothing"
+    if backend == "playback":
+        return "add a /health endpoint and run the tests"
     raise NotImplementedError(f"no permission-provoking prompt for backend {backend!r}")
 
 
@@ -132,13 +152,17 @@ def permission_tool(backend) -> str:
 @pytest.fixture
 def denied_marker(backend) -> str:
     """Text the final artifact carries when a tool was denied."""
-    return "permission denied"
+    if backend == "echo":
+        return "permission denied"
+    if backend == "playback":
+        return "Skipped the test run"
+    raise NotImplementedError(f"no denial marker for backend {backend!r}")
 
 
 @pytest.fixture
 def tool_marker(backend) -> str:
     """A tool name expected to show up in working-status text."""
-    return "Echo" if backend == "echo" else "Bash"
+    return "Echo" if backend == "echo" else "Read"
 
 
 @pytest.fixture

@@ -25,14 +25,14 @@ async def test_get_task_preserves_context(client, simple_prompt):
     assert task.context_id == capture.context_id
 
 
-async def test_get_task_retains_artifacts(client, simple_prompt):
+async def test_get_task_retains_artifacts(client, simple_prompt, reply_marker):
     """A client reconnecting after a dropped stream should still see output."""
     capture = await send(client, simple_prompt)
 
     task = await client.get_task(GetTaskRequest(id=capture.task_id))
 
     joined = "".join(p.text for a in task.artifacts for p in a.parts if p.text)
-    assert simple_prompt in joined
+    assert reply_marker in joined
 
 
 # Canceling a task parked on input-required does not take: the call returns

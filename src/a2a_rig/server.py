@@ -1,15 +1,22 @@
-"""Launch an ``a2acode serve`` subprocess for tests to drive.
+"""Launch a server subprocess for tests to drive.
 
-a2acode lives in its own checkout with its own (3.14) virtualenv, so the rig
-does not import it — it shells out via ``uv run --project``. That keeps the two
-dependency trees independent and means the harness drives a2acode exactly the
-way a real client would: over the wire, no in-process shortcuts.
+Two routes, both ending at a2acode's real server. a2acode's own backends
+(``echo``, ``claude``, ``acp``) are launched through its CLI in its own
+checkout, via ``uv run --project`` — the harness does not import a2acode to
+run those, so it drives them exactly the way a real client would: over the
+wire, no in-process shortcuts. ``playback`` is ours, so it goes through
+``rig-serve``, which injects our backend into a2acode's ``build_app()``.
+
+(The ``a2a_playback`` package *does* import a2acode — it has to, to implement
+its Backend protocol. That is a different thing from the harness importing it
+to take shortcuts around the network.)
 """
 
 from __future__ import annotations
 
 import os
 import socket
+import sys
 import subprocess
 import time
 from contextlib import closing, contextmanager
@@ -70,28 +77,60 @@ def _drain(proc: subprocess.Popen) -> str:
         return ""
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SCENARIO = REPO_ROOT / "scenarios" / "billing-api.yaml"
+
+
+def _playback_command(port: int, scenario: str | Path | None) -> list[str]:
+    """`playback` is ours, so it is served by rig-serve, not the a2acode CLI.
+
+    Uses the running interpreter rather than a console script so the harness
+    works from a bare checkout without an install step.
+    """
+    return [
+        sys.executable,
+        "-m",
+        "a2a_playback.serve",
+        "--scenario",
+        str(scenario or DEFAULT_SCENARIO),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+    ]
+
+
 @contextmanager
 def serve(
     backend: str = "echo",
     cwd: str | Path | None = None,
     extra_args: list[str] | None = None,
     port: int | None = None,
+    scenario: str | Path | None = None,
 ):
-    """Run ``a2acode serve`` for the duration of the block, yielding its base URL."""
+    """Run a server for the duration of the block, yielding its base URL.
+
+    `echo`, `claude`, and `acp` go through a2acode's own CLI; `playback` goes
+    through rig-serve, which injects our backend into a2acode's `build_app()`.
+    Either way what comes up is a2acode's real server.
+    """
     port = port or free_port()
     url = f"http://127.0.0.1:{port}/"
-    cmd = [
-        *a2acode_command(),
-        "serve",
-        "--backend",
-        backend,
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-    ]
-    if cwd is not None:
-        cmd += ["--cwd", str(cwd)]
+    if backend == "playback":
+        cmd = _playback_command(port, scenario)
+    else:
+        cmd = [
+            *a2acode_command(),
+            "serve",
+            "--backend",
+            backend,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ]
+        if cwd is not None:
+            cmd += ["--cwd", str(cwd)]
     cmd += extra_args or []
 
     proc = subprocess.Popen(
