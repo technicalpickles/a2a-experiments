@@ -7,8 +7,13 @@ agent tests can develop against offline. Phase 6's exit criterion: agent tests r
 fake repos in under 5s total, and the frontend dev loop is offline.
 
 This spec settles the questions M2 opens; the architectural decisions in it (the registry
-contract, the mounted-app topology) belong in DESIGN-v3 once implemented, per this repo's
-convention that DESIGN-v3 is the plan of record.
+contract, the mounted-app topology, the repo/scenario split) belong in DESIGN-v3 once
+implemented, per this repo's convention that DESIGN-v3 is the plan of record.
+
+**DESIGN-v3 needs a correction as part of this work.** §2 says "a fake repo *is* just a scenario
+file" while §4 defines a scenario as "a list of plays" — the same conflation this spec resolves,
+and its §2 diagram already wobbles between `repos/` and `scenarios/` in adjacent lines. That is
+an architecture change, so it belongs in DESIGN-v3 rather than a DEVLOG note.
 
 ## Context
 
@@ -16,7 +21,7 @@ There is no frontend yet. M2 designs the dev environment before its first consum
 governing risk is over-building for an imagined one. Two facts constrain the design:
 
 - **playback never touches the filesystem.** `_playback_command` doesn't pass `--cwd`; a fake
-  repo's content is entirely in its scenario YAML.
+  repo's content is entirely in YAML.
 - **a2acode has no file API.** Its HTTP surface is card routes, JSON-RPC, and REST A2A routes
   (`server.py:140-150`). A frontend cannot read repo files from the producer — not in the rig,
   and not in production either.
@@ -26,28 +31,86 @@ serving files would mean inventing an endpoint the real producer doesn't have, w
 drift DESIGN-v3 exists to prevent, made worse by looking official. Whether something else
 eventually serves files is deliberately left open (see Layout).
 
-## Layout
+## Splitting "repo" from "scenario"
+
+**A repo has scenarios; it is not one.** Today one YAML does both jobs: `name` and `card:`
+declare who the fake agent is, while `plays:` is the script it runs. DESIGN-v3 carries that
+conflation too — §4 defines a scenario as "a list of plays," and §2 says "a fake repo *is* just
+a scenario file." The word came from the deterministic-backend research (pass-4), where the
+prior art it surveyed used "scenario" for a scripted transcript. That is the meaning worth
+keeping.
+
+M2 is where the conflation starts costing something, and M3 is where it breaks:
+
+- Nesting a `scenario.yaml` inside `repos/<name>/` gives a repo two names — the directory and
+  the one in its `card:` block — with nothing keeping them honest.
+- Recording (M3) produces *several* scripts per repo: the refactor session, the one that hit a
+  permission gate, the one that failed. If identity lives inside the script, every recording
+  restates who the repo is, and they drift apart.
+
+So the format splits:
 
 ```
 a2a-rig/
-  repos/                          # the fake-repo directory
-    billing-api/scenario.yaml     # moved from scenarios/billing-api.yaml
-    checkout-web/scenario.yaml    # new
-    infra-terraform/scenario.yaml # new
-  tests/scenarios/vocabulary.yaml # unchanged
+  repos/
+    billing-api/
+      repo.yaml                   # identity and defaults
+      scenarios/
+        refactor.yaml             # plays only
+    checkout-web/
+      repo.yaml
+      scenarios/upgrade.yaml
+    infra-terraform/
+      repo.yaml
+      scenarios/plan-and-apply.yaml
+  tests/repos/vocabulary/         # test instruments are repos too
+    repo.yaml
+    scenarios/probes.yaml
 ```
 
-**A repo is a directory containing `scenario.yaml`.** Directory-per-repo rather than a flat
-`<name>.yaml` because the file-access question is open, not decided: a `files/` subdirectory or
-a real checkout can land later without moving anything consumers depend on. That is the only
-thing the extra directory level buys, and it is bought deliberately.
+**`repo.yaml` — who this agent is.** No `name:` field: the **directory name is the repo id**,
+and it is what appears in URLs and in the registry. That removes the two-sources-of-truth
+problem rather than resolving it by fiat.
 
-`scenarios/billing-api.yaml` moves to `repos/billing-api/scenario.yaml` so there is one answer
-to "where do fake repos live." `tests/scenarios/` stays where it is: those are test
-instruments, not repos, and must not appear in the registry.
+```yaml
+card:
+  name: billing-api
+  description: "Fake billing-api repo (playback)"
+defaults:
+  delay_ms: 0
+```
 
-Three repos ship, because the exit criterion says 3+ and because two is not enough to notice a
-registry that accidentally serves the same scenario twice.
+**`scenarios/*.yaml` — what it does.** Plays, and nothing else. A mapping rather than a bare
+list, so M3 recordings can carry provenance (source prompt, date, backend) without another
+format change:
+
+```yaml
+plays:
+  - match: { contains: "run the tests" }
+    events: [...]
+```
+
+**Combining:** a repo's scenario files are read in filename order and their plays concatenated
+into one list, then matched first-match-wins exactly as a single file's plays are today.
+Validation runs over the *concatenated* list, not per file — otherwise a catch-all `{}` in
+`01-x.yaml` would silently shadow everything in `02-y.yaml`, which is the existing
+catch-all-must-be-last rule leaking across a file boundary.
+
+This makes M3 purely additive: a recorded scenario is a new file in `scenarios/`, and nothing
+about the repo or the format changes to accept it.
+
+**One format, one concept.** The single-file `--scenario <file>` mode is removed rather than
+kept as a convenience; keeping it would mean two file formats and reintroduce the exact
+ambiguity this split exists to remove. A repo directory is the unit everywhere, so
+`tests/scenarios/vocabulary.yaml` becomes `tests/repos/vocabulary/` — which is honest, since
+vocabulary genuinely is a fake repo that happens to be used as a test instrument. Test repos
+live under `tests/` and never appear in the shipped registry.
+
+Directory-per-repo also keeps the file-access question open: a `files/` subdirectory or a real
+checkout lands later without moving anything consumers depend on.
+
+Three repos ship under `repos/`, because the exit criterion says 3+ and because two is not
+enough to notice a registry that accidentally serves the same repo twice.
 
 ## The registry contract
 
@@ -67,9 +130,9 @@ registry that accidentally serves the same scenario twice.
 
 - **`card_url` is absolute.** That is what makes the document survive a topology change: the
   same index shape describes N mounted paths or N standalone ports.
-- **`name` and `description` come from the scenario's `card:` block.** No second place to
-  declare a repo's identity, and no filename-derived metadata that could disagree with the card
-  a client actually fetches.
+- **`name` is the directory name** — the repo id, and the same string that appears in the URL.
+- **`description` comes from `repo.yaml`'s `card:` block**, so the index quotes the card a
+  client will actually fetch rather than maintaining a second copy of it.
 - **No agent card at the root.** The rig is not an agent. A root card would be a small lie of
   exactly the kind this project avoids, and `/.well-known/agent-card.json` at the root
   correctly 404s.
@@ -93,9 +156,10 @@ rig change its mind later, which is the whole reason to have one.
 rig-serve --repos repos/ --port 9200
 ```
 
-`--repos` and `--scenario` are mutually exclusive; passing both is an argument error rather
-than one silently winning. The harness helper `a2a_rig.server.serve()` gains a matching
-`repos=` parameter alongside its existing `scenario=`, subject to the same exclusivity.
+`--repos <dir>` serves every repo under a directory; `--repo <dir>` serves exactly one. They are
+mutually exclusive, and passing both is an argument error rather than one silently winning. The
+old `--scenario <file>` is removed, along with `serve()`'s `scenario=` parameter, which gains
+`repo=` and `repos=` in its place.
 
 Mounts one `build_app()` per repo at `/repos/<name>/` in a parent Starlette app. `build()`
 already returns a plain Starlette app, so the wrapper is small (DESIGN-v2 §9 pattern 2). One
@@ -105,9 +169,9 @@ The cost is that cards live at `/repos/<name>/.well-known/agent-card.json` rathe
 host root, so generic off-the-shelf clients need to be handed an explicit card URL instead of
 discovering one by probing.
 
-**Retained — one process per repo.** The existing `rig-serve --scenario X --port N` path is
-unchanged. This is the topology a real deployment would use, where each repo is a standalone
-agent with a root-scoped card that any client discovers unaided.
+**Retained — one process per repo.** `rig-serve --repo repos/billing-api --port N` serves a
+single repo at a host root. This is the topology a real deployment would use, where each repo is
+a standalone agent with a root-scoped card that any client discovers unaided.
 
 It is retained for a specific reason, not as a hedge: it is what proves the registry
 abstraction is honest. If a consumer built against the index cannot be pointed at three
@@ -146,27 +210,56 @@ Booting once for all N is what keeps the under-5s criterion reachable as repos a
 paying per-repo startup per test would not scale past a handful.
 
 This follows the existing pooling pattern in `tests/conftest.py` (`_server_pool`) and
-`tests/test_playback.py` (`_scenario_servers`) rather than introducing a third approach.
+`tests/test_playback.py` (`_scenario_servers`) rather than introducing a third approach. The
+existing `on_scenario` fixture becomes `on_repo`, pointing at `tests/repos/<name>/`.
 
 ## Error handling
 
-**A malformed scenario anywhere under `repos/` fails startup, naming the offending file.**
+**A malformed repo anywhere under `repos/` fails startup, naming the offending file.**
 Consistent with how `rig-serve` already treats scenario errors (`serve.py` catches
 `ScenarioError`, prints, exits 2). A rig that silently serves 2 of 3 repos is worse than one
 that refuses to start: the missing repo would surface later as a confusing 404 in a frontend
 rather than as an error at the moment it was introduced.
 
-An empty `repos/` directory is an error for the same reason — a rig serving nothing is a
-configuration mistake, not a valid state.
+Startup errors, each naming the path:
+
+- a directory under `repos/` with no `repo.yaml`
+- a repo whose `scenarios/` is missing or holds no plays — a repo that can answer nothing is a
+  mistake, not a valid state, and would otherwise fail per-turn later
+- a malformed scenario file, or a concatenated play list that breaks the catch-all-must-be-last
+  rule across file boundaries
+- an empty `repos/` directory, for the same reason: a rig serving nothing is a configuration
+  mistake
 
 ## Testing
 
-- The index lists every repo in the directory, and only those (no test instruments leak in).
+- The index lists every repo in the directory, and only those (no test repos leak in).
 - Each advertised `card_url` is reachable and returns a card whose name matches the index.
 - Two repos serve genuinely different content for the same prompt. This is the actual claim of
   the milestone — everything else is plumbing.
-- A malformed scenario in the directory fails startup with the filename in the message.
+- Plays concatenate across a repo's scenario files in filename order, and a catch-all in an
+  earlier file is rejected rather than silently shadowing a later one.
+- Each startup error above fails with the offending path in the message.
 - The `repos` fixture serves 3+ repos within the phase's time budget.
+
+## Migration
+
+The split touches existing code and files. Nothing consumes the rig yet, so this is the
+cheapest it will ever be — which is the reason to do it inside M2 rather than after.
+
+- `scenarios/billing-api.yaml` → `repos/billing-api/{repo.yaml, scenarios/refactor.yaml}`
+- `tests/scenarios/vocabulary.yaml` → `tests/repos/vocabulary/{repo.yaml, scenarios/probes.yaml}`
+- `scenario.py` keeps its name and its job — parsing and validating a plays document — and
+  loses `name`, `card`, and `defaults`, which move to a new repo loader. `Scenario` stays the
+  parsed plays document; a new `Repo` carries identity, defaults, and the combined play list.
+- `PlaybackBackend` takes a `Repo` rather than a `Scenario`.
+- `serve.py` swaps `--scenario` for `--repo`/`--repos`.
+- The validation tests in `test_playback.py` that call `parse({...})` directly split along the
+  same seam: play-level rules stay with the scenario parser, and the "needs a name" style rules
+  move to repo loading.
+
+The 4 xfailed cancel tests and the backend-agnostic suite should come through untouched. If the
+backend-agnostic suite needs edits, that is a signal the split leaked into the wrong layer.
 
 ## Out of scope
 
