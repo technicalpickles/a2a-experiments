@@ -49,8 +49,17 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _wait_until_serving(url: str, proc: subprocess.Popen, deadline: float) -> None:
-    card_url = f"{url.rstrip('/')}/.well-known/agent-card.json"
+def _wait_until_serving(
+    url: str, proc: subprocess.Popen, deadline: float, ready_path: str = "/.well-known/agent-card.json"
+) -> None:
+    """Poll `ready_path` until it 200s.
+
+    Defaults to the agent card, which is what a single-repo app serves at its
+    root. A mounted rig has no card at its root by design (see
+    `build_rig_app`), so callers serving `repos` pass `ready_path="/"` to poll
+    the index document instead.
+    """
+    ready_url = f"{url.rstrip('/')}{ready_path}"
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
@@ -59,13 +68,13 @@ def _wait_until_serving(url: str, proc: subprocess.Popen, deadline: float) -> No
                 f"{_drain(proc)}"
             )
         try:
-            if httpx.get(card_url, timeout=2.0).status_code == 200:
+            if httpx.get(ready_url, timeout=2.0).status_code == 200:
                 return
         except httpx.HTTPError as exc:  # not up yet
             last_error = exc
         time.sleep(0.1)
     proc.terminate()
-    raise TimeoutError(f"a2acode did not serve {card_url} in time: {last_error}")
+    raise TimeoutError(f"a2acode did not serve {ready_url} in time: {last_error}")
 
 
 def _drain(proc: subprocess.Popen) -> str:
@@ -81,18 +90,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPO = REPO_ROOT / "repos" / "billing-api"
 
 
-def _playback_command(port: int, repo: str | Path | None) -> list[str]:
+def _playback_command(
+    port: int, repo: str | Path | None, repos: str | Path | None
+) -> list[str]:
     """`playback` is ours, so it is served by rig-serve, not the a2acode CLI.
 
     Uses the running interpreter rather than a console script so the harness
     works from a bare checkout without an install step.
     """
+    selector = ["--repos", str(repos)] if repos else ["--repo", str(repo or DEFAULT_REPO)]
     return [
         sys.executable,
         "-m",
         "a2a_playback.serve",
-        "--repo",
-        str(repo or DEFAULT_REPO),
+        *selector,
         "--host",
         "127.0.0.1",
         "--port",
@@ -107,6 +118,7 @@ def serve(
     extra_args: list[str] | None = None,
     port: int | None = None,
     repo: str | Path | None = None,
+    repos: str | Path | None = None,
     env: dict[str, str] | None = None,
 ):
     """Run a server for the duration of the block, yielding its base URL.
@@ -118,7 +130,7 @@ def serve(
     port = port or free_port()
     url = f"http://127.0.0.1:{port}/"
     if backend == "playback":
-        cmd = _playback_command(port, repo)
+        cmd = _playback_command(port, repo, repos)
     else:
         cmd = [
             *a2acode_command(),
@@ -144,8 +156,9 @@ def serve(
         # whatever `uv run` reads to resolve the checkout.
         env={**os.environ, **env} if env else None,
     )
+    ready_path = "/" if repos else "/.well-known/agent-card.json"
     try:
-        _wait_until_serving(url, proc, time.monotonic() + STARTUP_TIMEOUT_S)
+        _wait_until_serving(url, proc, time.monotonic() + STARTUP_TIMEOUT_S, ready_path)
         yield url
     finally:
         if proc.poll() is None:
