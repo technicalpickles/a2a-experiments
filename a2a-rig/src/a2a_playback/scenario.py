@@ -30,6 +30,7 @@ EVENT_NAMES = {
     "plan",
     "notice",
     "permission",
+    "error",
     "result",
 }
 
@@ -179,6 +180,15 @@ def _parse_play(raw: Any, index: int, where: str) -> Play:
     )
 
 
+def message_of(body: Any) -> str:
+    """`- error: "boom"` and `- error: {message: "boom"}` should both work."""
+    if isinstance(body, str):
+        return body.strip()
+    if isinstance(body, dict):
+        return str(body.get("message") or body.get("text") or "").strip()
+    return ""
+
+
 def _validate_event(event: Any, play_index: int, where: str) -> None:
     if not isinstance(event, dict) or len(event) != 1:
         raise ScenarioError(
@@ -191,6 +201,11 @@ def _validate_event(event: Any, play_index: int, where: str) -> None:
             f"{where}: play #{play_index} has unknown event {kind!r}; "
             f"expected one of {sorted(EVENT_NAMES)}"
         )
+    if kind == "error" and not message_of(body):
+        raise ScenarioError(
+            f"{where}: play #{play_index} `error` needs a message saying how the "
+            f"run failed"
+        )
     if kind == "permission":
         if not isinstance(body, dict):
             raise ScenarioError(
@@ -200,6 +215,11 @@ def _validate_event(event: Any, play_index: int, where: str) -> None:
             raise ScenarioError(
                 f"{where}: play #{play_index} `permission` needs a `tool`"
             )
-        for branch in ("on_allow", "on_deny"):
+        if body.get("on_timeout") and body.get("timeout_ms") is None:
+            raise ScenarioError(
+                f"{where}: play #{play_index} `permission` has an `on_timeout` "
+                f"branch but no `timeout_ms` to reach it; nothing would ever run it"
+            )
+        for branch in ("on_allow", "on_deny", "on_timeout"):
             for nested in body.get(branch) or []:
                 _validate_event(nested, play_index, where)

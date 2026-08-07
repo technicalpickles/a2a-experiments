@@ -149,13 +149,33 @@ inference and sub-second turns. **From here, frontend development can start for 
 
 ## Phase 5 — M1: full scenario vocabulary *(anywhere)*
 
-- [ ] `permission` events with `on_allow`/`on_deny`/`timeout_ms` branches.
-- [ ] `plan`, `thought`, `file_change`, `notice` events; `error`/`stop_reason` variants.
-- [ ] `delay_ms` + `PLAYBACK_SPEED`; cancel honored mid-delay.
-- [ ] Harness tests for each (the permission/deny/timeout tests you could never run reliably
+- [x] `permission` events with `on_allow`/`on_deny`/`timeout_ms` branches.
+      `on_timeout` added as its own branch (falling back to `on_deny`) so a scenario can say
+      something different about "walked away" than about "refused"; omitting `timeout_ms`
+      still waits indefinitely. A caller who answers late resumes into the branch that
+      already ran.
+- [x] `error`/`stop_reason` variants. `error` raises a `ScriptedError` rather than emitting,
+      so the task fails through a2acode's real failure path; `stop_reason` was already
+      plumbed and is now pinned by a test.
+- [ ] `plan`, `thought`, `file_change`, `notice` events. `thought`/`file_change`/`notice` are
+      implemented and covered incidentally by the Phase 4 scenario; **`plan` is deferred**
+      until taskwarrior `fb20c22b` captures a real `TodoWrite`-derived plan event, since
+      scripting it now would be writing against a code path nobody has watched run.
+- [x] `delay_ms` + `PLAYBACK_SPEED` under test. Fixed along the way: `delay_ms` on a
+      `permission` event was silently ignored, because the delay ran after the event
+      dispatch rather than before it.
+- [ ] Cancel honored mid-delay. **Does not work, and not ours to fix** — a mid-run cancel
+      strands the task in `working` with no terminal state at all, which is worse than the
+      parked-cancel no-op already documented in Phase 3. Traced to a2a-sdk's
+      `ActiveTask.cancel` killing the producer before awaiting the executor's own cancel
+      (taskwarrior `167506a4`, with `5dcde5fb` for a2acode's side). Captured as two strict
+      xfails plus a test documenting today's behavior.
+- [x] Harness tests for each (the permission/deny/timeout tests you could never run reliably
       against live inference).
 
-**Exit:** a UI can build chat, plan, diff, and approval views entirely offline.
+**Exit:** a UI can build chat, diff, and approval views entirely offline. ✅ for chat, diffs,
+approvals (including the abandoned-approval and mid-run-failure paths); plan views wait on
+`fb20c22b`. 70 passed, 4 xfailed against both `echo` and `playback`, under 5s each.
 
 ## Phase 6 — M2: multi-repo rig + your consumers *(anywhere)*
 

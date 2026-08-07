@@ -107,6 +107,7 @@ def serve(
     extra_args: list[str] | None = None,
     port: int | None = None,
     scenario: str | Path | None = None,
+    env: dict[str, str] | None = None,
 ):
     """Run a server for the duration of the block, yielding its base URL.
 
@@ -139,6 +140,9 @@ def serve(
         stderr=subprocess.STDOUT,
         text=True,
         start_new_session=True,
+        # Overlaid rather than replaced: the child still needs PATH, HOME, and
+        # whatever `uv run` reads to resolve the checkout.
+        env={**os.environ, **env} if env else None,
     )
     try:
         _wait_until_serving(url, proc, time.monotonic() + STARTUP_TIMEOUT_S)

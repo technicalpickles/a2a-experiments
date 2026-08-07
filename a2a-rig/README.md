@@ -62,7 +62,8 @@ those fixtures — not editing a single test body.
 
 A scenario is a list of *plays*; each incoming message selects one by match rule; a play is a
 list of events written in a2acode's own `BackendEvent` vocabulary (`text`, `tool_use`,
-`tool_result`, `file_change`, `plan`, `thought`, `notice`, `permission`, `result`).
+`tool_result`, `file_change`, `plan`, `thought`, `notice`, `permission`, `result`), plus
+`error` for a run that dies partway.
 
 ```yaml
 plays:
@@ -74,9 +75,23 @@ plays:
       - permission:                       # parks the task in input-required
           tool: Bash
           input: { command: "pytest tests/ -q" }
-          on_allow: [ { text: "42 tests pass." }, { result: { cost_usd: 0.0173 } } ]
-          on_deny:  [ { text: "Skipped the test run." }, { result: { cost_usd: 0.0102 } } ]
+          timeout_ms: 30000                 # optional; omitted means wait forever
+          on_allow:   [ { text: "42 tests pass." }, { result: { cost_usd: 0.0173 } } ]
+          on_deny:    [ { text: "Skipped the test run." }, { result: { cost_usd: 0.0102 } } ]
+          on_timeout: [ { text: "Nobody answered, so I left it." } ]
+      - error: "the sandbox ran out of disk"   # fails the task, like a real crash
 ```
+
+A `permission` with `timeout_ms` takes `on_timeout` (falling back to `on_deny`) when nobody
+answers in time — the abandoned-approval path, which live inference cannot be asked to
+reproduce on demand. A caller who answers *after* that resumes into the branch that already
+ran, rather than the one they asked for, which is the honest rendering of having walked away.
+Leaving `timeout_ms` off means wait indefinitely: a gate that quietly expired would turn a
+slow reviewer into a denial nobody scripted.
+
+An `error` event raises rather than emits, so the task fails through a2acode's real failure
+path. `result: { stop_reason: ... }` reaches the caller as completion metadata, which is how a
+truncated answer is told from a finished one.
 
 Match rules, first match wins: `turn: N` (counted per context, so a fresh conversation replays
 from the top), `contains:`, `regex:`, and `{}` for a catch-all. Rules within one `match`
@@ -88,7 +103,9 @@ answer. Scenario files are also validated at startup, so a typo'd event name fai
 server boots rather than mid-stream.
 
 Set `PLAYBACK_SPEED` to scale `delay_ms` pacing (unset or `0` means instant, the CI default;
-`1.0` is lifelike).
+`1.0` is lifelike, `0.1` is a tenth of the scripted pace). `delay_ms` goes on any event, or
+on `defaults:` for the whole scenario, and applies to a `permission` too — a gate that arrives
+the instant you ask reads as a UI bug rather than a script.
 
 ## Layout
 

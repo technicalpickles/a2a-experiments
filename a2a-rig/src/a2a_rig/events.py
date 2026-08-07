@@ -140,8 +140,20 @@ def _struct_to_dict(metadata) -> dict[str, Any]:
     return MessageToDict(metadata, preserving_proto_field_name=True)
 
 
-async def send(client, text: str, *, task_id: str = "", context_id: str = "") -> Capture:
-    """Send one message and drain the whole event stream into a Capture."""
+async def send(
+    client,
+    text: str,
+    *,
+    task_id: str = "",
+    context_id: str = "",
+    on_event=None,
+) -> Capture:
+    """Send one message and drain the whole event stream into a Capture.
+
+    ``on_event(event, capture)`` is awaited after each event, for the tests
+    that have to act *during* a turn rather than after it — cancelling a run
+    in flight is the one that needs it.
+    """
     message = user_message(text, task_id=task_id, context_id=context_id)
     capture = Capture(task_id=task_id, context_id=context_id)
     async for event in client.send_message(SendMessageRequest(message=message)):
@@ -154,4 +166,6 @@ async def send(client, text: str, *, task_id: str = "", context_id: str = "") ->
             update = getattr(event, which)
             capture.task_id = capture.task_id or update.task_id
             capture.context_id = capture.context_id or update.context_id
+        if on_event is not None:
+            await on_event(event, capture)
     return capture

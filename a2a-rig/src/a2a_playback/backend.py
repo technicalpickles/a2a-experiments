@@ -31,7 +31,19 @@ from a2acode.backends.base import (
 )
 from a2acode.backends.session import BackendSession
 
-from .scenario import Scenario, ScenarioError
+from .scenario import Scenario, ScenarioError, message_of
+
+
+class ScriptedError(RuntimeError):
+    """A failure the scenario asked for.
+
+    Distinct from ``ScenarioError`` on purpose: that one means the scenario is
+    wrong, this one means the scenario is right and the run it describes is a
+    failing one. Raising rather than emitting is what makes it a real failure —
+    a2acode's session relays the exception to the executor, which fails the
+    task through the same path a crashed backend takes.
+    """
+
 
 # Scales every delay_ms. 0 means "no delays at all" — the CI default; 1.0 is
 # lifelike. Read per-run rather than cached so a demo can change pacing without
@@ -79,25 +91,49 @@ class PlaybackBackend:
     ) -> None:
         for event in events:
             (kind, body), = event.items()
+            # Before the dispatch below, so a gate can be paced too: an
+            # approval that arrives the instant you ask reads as a UI bug.
+            await self._delay(body)
             if kind == "permission":
                 await self._permission(session, body, request)
                 # The branch we took carries its own terminal `result`; nothing
                 # after a permission event in the same list would be reachable
                 # in a real run either.
                 return
-            await self._delay(body)
+            if kind == "error":
+                raise ScriptedError(message_of(body))
             await session.emit(self._to_backend_event(kind, body, request))
 
     async def _permission(
         self, session: BackendSession, body: dict[str, Any], request: RunRequest
     ) -> None:
-        decision = await session.request_permission(
+        asking = session.request_permission(
             body["tool"],
             body.get("input") or {},
             body.get("description") or "",
         )
-        branch = body.get("on_allow" if decision.allow else "on_deny") or []
+        timeout_ms = body.get("timeout_ms")
+        if timeout_ms is None:
+            # No timeout is the default on purpose: a gate that quietly expired
+            # would turn a slow reviewer into a denial nobody scripted.
+            branch = await self._answered(asking, body)
+        else:
+            try:
+                branch = await self._answered(
+                    asyncio.wait_for(asking, float(timeout_ms) / 1000.0), body
+                )
+            except TimeoutError:
+                # Nobody answered. The request stays pending in the session, so
+                # a caller who does eventually reply resumes into this branch
+                # rather than the one they asked for — which is the honest
+                # rendering of having walked away.
+                branch = body.get("on_timeout") or body.get("on_deny") or []
         await self._run_events(session, branch, request)
+
+    @staticmethod
+    async def _answered(asking, body: dict[str, Any]) -> list[dict[str, Any]]:
+        decision = await asking
+        return body.get("on_allow" if decision.allow else "on_deny") or []
 
     async def _delay(self, body: Any) -> None:
         speed = _speed()

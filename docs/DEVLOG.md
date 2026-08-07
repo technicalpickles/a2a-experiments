@@ -366,3 +366,110 @@ the active copy, and committed it there (that repo's `origin` remote has no URL 
 the commit is local-only, not pushed anywhere). It stays on disk deliberately — it's the source
 `git subtree split` would replay from if `a2a-rig/` ever gets extracted back out — but is no
 longer where anyone should make changes.
+
+## 2026-08-07 — Phase 5 (M1): the vocabulary a frontend can't provoke on demand
+
+Picked up Phase 5 deliberately narrowed: everything except `plan`, which stays blocked on
+taskwarrior `fb20c22b` (no real `TodoWrite`-derived plan event has ever been observed, so
+scripting one would be writing against a code path nobody has watched run). Doing the rest
+first cost nothing and unblocked four behaviors.
+
+The framing that made this phase worth doing: these are all states a UI has to render and
+*cannot reliably provoke from live inference*. You cannot ask a real model to run out of disk
+partway through, or to hit a token ceiling on cue, or to sit on an approval prompt for exactly
+200ms. Scripted, each is a two-line play.
+
+### What landed
+
+**`error` events.** A new event kind that *raises* (`ScriptedError`) rather than emitting.
+That matters: raising is what makes it a real failure — a2acode's `BackendSession` relays the
+exception to the executor, which fails the task through the same path a crashed backend takes.
+Kept deliberately distinct from `ScenarioError`: that one means the scenario is wrong, this
+one means the scenario is right and the run it describes is a failing one.
+
+**`stop_reason` variants.** Already plumbed end to end (backend → `Result` → a2acode's
+`_result_metadata` → completion-message metadata), just never asserted. Now pinned, because
+telling a truncated answer from a finished one is the whole reason a frontend reads it.
+
+**`permission` `timeout_ms`, with `on_timeout`.** The abandoned-approval path. Implemented as
+`asyncio.wait_for` around `session.request_permission`. Two design calls worth recording:
+
+- **`on_timeout` is its own branch, falling back to `on_deny`.** A frontend renders "you
+  declined" and "nobody was there" differently, and collapsing them would have made the
+  feature untestable at the level that matters.
+- **No `timeout_ms` means wait indefinitely**, not some default. A gate that quietly expired
+  would turn a slow reviewer into a denial nobody scripted — a mock-shaped failure, exactly
+  what this rig exists to avoid.
+
+The nicest part fell out of a2acode's own machinery rather than being designed: `wait_for`
+cancels the *await*, but the request stays in the session's `_pending` map, so `is_parked`
+remains true and `resolve` no-ops on the already-cancelled future. A caller who finally
+answers therefore resumes into the branch that already ran — they say "allow" and get told
+production is untouched. That is the honest rendering of having walked away, and it works
+without a line of special-casing.
+
+**`delay_ms` / `PLAYBACK_SPEED` under test**, which turned up a real bug: `delay_ms` on a
+`permission` event was silently ignored, because `_run_events` dispatched permissions before
+reaching the `_delay` call. So "think for two seconds, then ask" was unscriptable. One-line
+fix (hoist the delay above the dispatch). Worth noting the shape of it: the code was written,
+it just had never been *run* in that combination — which is the argument for the phase.
+
+`serve()` grew an `env` parameter to make this testable over the wire, overlaid on
+`os.environ` rather than replacing it so the child still resolves `uv` and `PATH`.
+
+### Cancel mid-run: worse than the parked case, and not ours
+
+The last checklist item — "cancel honored mid-delay" — does not work, and the failure is more
+interesting than the feature would have been.
+
+The existing Phase 3 finding was that cancelling a task parked on `input-required` silently
+no-ops. The natural hypothesis was that a task genuinely mid-run would cancel fine, since the
+a2a-sdk guard that swallows the parked case (`if not self._is_finished.is_set() and
+self._producer_task`) is satisfied there. It doesn't. It's worse:
+
+```
+STREAM states:        ['working', 'working']    # stream just stops
+cancel_task returned: working
+later get_task:       working                   # forever
+```
+
+No terminal state is ever written. Traced through both layers:
+
+- **a2a-sdk** (`ActiveTask.cancel`, `active_task.py` ~L733): cancels `self._producer_task`
+  *first*, then awaits `self._agent_executor.cancel(...)`. The producer is the task running
+  `execute`.
+- **a2acode** (`executor.py`): `_pump`'s `except asyncio.CancelledError` branch is the one
+  path that deliberately emits no status — it drops the session and re-raises. That branch
+  was written for a *disconnected client*, where there is nobody left to tell. A deliberate
+  cancel takes the same branch.
+- The `updater.cancel()` inside a2acode's own `cancel()` does enqueue a canceled status, but
+  by then it doesn't reach the task store; and `ActiveTask.cancel` returns the task it read
+  *before* cancelling, which still says `working`. That's what the caller gets back.
+
+So the ordering is the bug: the only component that owns the task's terminal state is killed
+before it can write one. Fixable on either side — the SDK awaiting the executor's cancel
+before killing the producer, or a2acode distinguishing "client vanished" from "cancelled on
+purpose". Filed as taskwarrior `167506a4` (a2a-sdk, primary) and `5dcde5fb` (a2acode).
+
+Captured as two strict xfails plus a passing test that documents today's behavior, matching
+how the parked-cancel finding was recorded in Phase 3. Strict, so they flip loudly if either
+side fixes it.
+
+**This is the rig paying for itself.** The bug needs a turn slow enough to interrupt, at a
+moment you can identify precisely. Against live inference that's a flaky test with an API bill
+attached. Scripted, it's a 3s `delay_ms` behind a `tool_use` that fires first as the "the
+driver is really running" signal — deterministic, free, ~200ms of wall clock, reproducible on
+every run.
+
+### Where it stands
+
+70 passed, 4 xfailed against both `echo` and `playback`, under 5s each (was 50/2). All new
+behavior was driven test-first; the two characterization tests for already-wired code
+(`stop_reason`, the `PLAYBACK_SPEED` scaling) are marked as such in their docstrings rather
+than dressed up as new.
+
+Test structure held: the backend-agnostic suite needed zero edits again, and everything new
+lives in `tests/test_playback.py`, which is playback-pinned by module marker. Two additions
+worth knowing about — an `on_scenario` fixture that pools servers per (scenario, env), and a
+small in-process section that drives `BackendSession` directly, because permission timeouts
+and scripted failures are decided at that seam rather than on the wire.
