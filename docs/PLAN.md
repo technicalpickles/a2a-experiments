@@ -100,7 +100,9 @@ skeleton your agents' own tests will grow from.
 - [x] New repo (`a2a-rig/` per DESIGN-v3 §7 layout): `a2a-sdk` + pytest + pytest-asyncio.
       Lives at `~/github.com/technicalpickles/a2a-rig`. v2's `clockwork/` layout does not
       apply — v3 dropped the fake-Anthropic-API approach, so the layout is just
-      `src/a2a_rig/` + `tests/`.
+      `src/a2a_rig/` + `tests/`. **Update 2026-08-07:** folded into `a2a-experiments` as an
+      `a2a-rig/` subtree (full history preserved) so it's visible alongside the docs while
+      still early; extraction back to its own repo is deferred, not abandoned. See CLAUDE.md.
 - [x] Fixtures: launch `a2acode serve` as a subprocess on a free port with chosen
       backend/flags; `ClientFactory.create_from_url()` client; teardown kills the server.
       Used `create_client()` rather than `ClientFactory.create_from_url()` (the shape the

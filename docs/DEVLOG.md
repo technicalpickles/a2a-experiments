@@ -324,3 +324,24 @@ run's. Instant, no key, no inference.
 against this now. Phase 5 (M1) is the remaining vocabulary depth: permission `timeout_ms`,
 `delay_ms`/`PLAYBACK_SPEED` under test, error and `stop_reason` variants, cancel honored
 mid-delay.
+
+## 2026-08-07 — Public, and incubating a2a-rig here
+
+Pushed this repo to GitHub public (`technicalpickles/a2a-experiments`) so coworkers can follow
+along. Scanned every tracked file for secrets first — only doc mentions of env var names
+(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`) and a placeholder `test-token`, nothing real.
+
+Then folded the standalone `a2a-rig` repo (`~/github.com/technicalpickles/a2a-rig`, Phases 3–4,
+3 commits) into this one under `a2a-rig/`, via `git subtree add --prefix=a2a-rig` against a
+temporary local remote pointing at that checkout — not a squash merge, so the three original
+commits (harness, cancel-root-cause note, playback backend) replay intact in this repo's
+history. The standalone checkout at `~/github.com/technicalpickles/a2a-rig` still exists
+untouched; it's now redundant but nothing depends on deleting it.
+
+Reasoning: `docs/PLAN.md` and the original `CLAUDE.md` both described `a2a-rig` as a permanent
+separate repo, which was the plan when Phase 3 started. That's no longer the intent — showing
+early, incomplete work to coworkers is easier with one repo to point at than two, and splitting
+too early was pure overhead for a project this size. `git subtree` was chosen specifically
+because the split is meant to be temporary: `git subtree split --prefix=a2a-rig` can hand the
+full, unsquashed history back to its own repo later without any rewriting. Updated `CLAUDE.md`
+and `docs/PLAN.md` to record this as the current state, not just a one-off note here.

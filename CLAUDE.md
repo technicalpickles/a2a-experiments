@@ -4,11 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-This repo is currently **docs-only** — no application code lives here yet. It's the planning
-and research record for building a deterministic A2A (Agent2Agent protocol) dev rig on top of
-[a2acode](https://github.com/kanywst/a2acode), a Claude-Code-over-A2A server. The actual rig
-code (a `playback` backend, scenario files, pytest harness) does not exist yet; see
-`docs/PLAN.md` for what's built so far.
+This is the planning, research, and (for now) code record for building a deterministic A2A
+(Agent2Agent protocol) dev rig on top of [a2acode](https://github.com/kanywst/a2acode), a
+Claude-Code-over-A2A server. `docs/` holds the design/plan/log; `a2a-rig/` holds the actual rig
+code (a `playback` backend, scenario files, pytest harness) — see `docs/PLAN.md` for what's
+built so far.
+
+`a2a-rig/` is **incubating here, not permanently living here.** It started as its own repo
+(`~/github.com/technicalpickles/a2a-rig`) and was folded in via `git subtree` on 2026-08-07 so
+early work stays visible alongside the docs that motivate it. The plan is to extract it back
+out to its own repo once it's further along — `git subtree split --prefix=a2a-rig` replays its
+commits cleanly when that happens, since the merge preserved full history rather than
+squashing it. Treat `a2a-rig/` as a self-contained project (own `pyproject.toml`, own
+`README.md`, own dependency on `a2acode`) that happens to be checked out under this repo, not
+as something to intermix with the docs-only conventions below.
 
 ## How work here is organized
 
@@ -40,10 +49,10 @@ Three documents, three different jobs — don't blend them:
 When picking up work in this repo: read `docs/PLAN.md` first for current status, `docs/DEVLOG.md`
 for recent context/decisions, and `docs/DESIGN-v3.md` for the target architecture.
 
-## Where the actual code lives (not in this repo)
+## Where the rest of the code lives (not in this repo)
 
-The rig is built *around* a2acode rather than inside this repo. Sibling checkouts, referenced
-throughout the docs:
+`a2a-rig/` (this repo) is built *around* a2acode rather than forking it. Sibling checkouts,
+referenced throughout the docs:
 
 - `~/github.com/kanywst/a2acode` — the producer being faked. Pinned at v0.6.2. Standard
   Python/`uv` project: `uv sync --dev`, `uv run pytest -q` (163 tests), `uv run a2acode serve
@@ -59,9 +68,10 @@ throughout the docs:
   `npm link`ed globally rather than installed from npm, so `a2a-cli` on `PATH` resolves here.
   Upstreaming the fix is tracked outside this repo (taskwarrior, project `a2a-experiments`).
 
-Future phases add an out-of-tree `playback` backend package and a pytest harness
-(`a2a-sdk` + pytest-asyncio) that imports a2acode rather than forking it — per DESIGN-v3 §7,
-no fork of a2acode itself is needed since backends are constructor-injected.
+`a2a-rig/` is the out-of-tree `playback` backend package and pytest harness (`a2a-sdk` +
+pytest-asyncio) that imports a2acode rather than forking it — per DESIGN-v3 §7, no fork of
+a2acode itself is needed since backends are constructor-injected. See `a2a-rig/README.md` for
+how to run it.
 
 ## Running a2acode
 
