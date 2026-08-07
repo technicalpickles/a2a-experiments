@@ -91,23 +91,34 @@ known-real reference — then stop spending.
 disk, transcript saved. Real inference is now optional for everything below. ✅
 Total spend: **$0.54** across two turns.
 
-## Phase 3 — Drive it the way your code will *(anywhere; no key; ~half a day)*
+## Phase 3 — Drive it the way your code will *(anywhere; no key; ~half a day)* ✅ done 2026-08-07
 
 Goal: a pytest harness using the official A2A client — written against echo now, reused
 verbatim against playback later (and against real backends whenever wanted). This is the
 skeleton your agents' own tests will grow from.
 
-- [ ] New repo (`a2a-rig/` per DESIGN-v3 §7 layout): `a2a-sdk` + pytest + pytest-asyncio.
-- [ ] Fixtures: launch `a2acode serve` as a subprocess on a free port with chosen
+- [x] New repo (`a2a-rig/` per DESIGN-v3 §7 layout): `a2a-sdk` + pytest + pytest-asyncio.
+      Lives at `~/github.com/technicalpickles/a2a-rig`. v2's `clockwork/` layout does not
+      apply — v3 dropped the fake-Anthropic-API approach, so the layout is just
+      `src/a2a_rig/` + `tests/`.
+- [x] Fixtures: launch `a2acode serve` as a subprocess on a free port with chosen
       backend/flags; `ClientFactory.create_from_url()` client; teardown kills the server.
-- [ ] Tests against echo: card fetch + field assertions; send → collect event stream →
+      Used `create_client()` rather than `ClientFactory.create_from_url()` (the shape the
+      1.1.2 SDK actually exposes, matching a2acode's own CLI). a2acode is *not* imported —
+      the harness shells out via `uv run --project`, keeping the two dependency trees
+      independent (a2acode is on 3.14, the rig on 3.13).
+- [x] Tests against echo: card fetch + field assertions; send → collect event stream →
       assert Task-first ordering, artifact chunks, terminal state; `input-required` round
       trip (allow and deny); multi-turn context; cancel mid-stream; `tasks/get` after
-      completion.
-- [ ] Make the backend a fixture parameter (`echo` today; `playback` next phase — the test
-      body shouldn't change).
+      completion. **Cancel of a parked task doesn't work** — two `xfail(strict=True)` tests
+      record it; see DEVLOG.
+- [x] Make the backend a fixture parameter (`echo` today; `playback` next phase — the test
+      body shouldn't change). `--backend` CLI option + `@pytest.mark.backend(...)`.
+      Backend-specific *stimuli* are fixtures too, so Phase 4 adds fixture branches rather
+      than editing tests.
 
-**Exit:** `pytest` green in seconds against echo; harness is backend-parameterized.
+**Exit:** `pytest` green in seconds against echo; harness is backend-parameterized. ✅
+31 passed, 2 xfailed, ~1.3s (servers pooled per backend; per-test launches cost 20s).
 
 ## Phase 4 — Playback M0: first fake repo *(anywhere; ~1–2 days)*
 

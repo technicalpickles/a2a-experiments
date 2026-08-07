@@ -171,3 +171,65 @@ artifacts verified on disk, transcript saved. Real inference is optional from he
 
 The `--backend acp` variant is still unrun (optional in the plan). Next up is Phase 3, which
 needs no key — and `dump_stream.py` is most of a first draft of its event-collection helper.
+
+## 2026-08-07 — Phase 3: the pytest harness
+
+New repo at `~/github.com/technicalpickles/a2a-rig`. PLAN pointed at "DESIGN-v3 §7 layout",
+but §7 only covers upstream strategy — the only concrete layout in the docs is DESIGN-v2's,
+which is superseded (it is built around `clockwork/`, the fake-Anthropic-API approach v3
+dropped). So the layout is just `src/a2a_rig/` + `tests/`.
+
+### Shape of it
+
+Three pieces. `server.py` launches `a2acode serve` on a free port and waits for the card;
+`events.py` collapses the protobuf event stream into an assertable `Capture`; `conftest.py`
+wires up the fixtures. Deliberately **not** importing a2acode — it shells out via
+`uv run --project`, which keeps the dependency trees independent (a2acode is on Python 3.14,
+the rig on 3.13) and means the harness drives a2acode the way a real client does, over the
+wire, with no in-process shortcuts. `A2ACODE_PROJECT` / `A2ACODE_CMD` relocate it.
+
+`server.py` surfaces a2acode's own stderr when the process dies before binding. That paid for
+itself immediately: running with a bogus `--backend` produced a2acode's real
+`ValueError: unknown backend` instead of an opaque connection timeout, which also proved the
+backend flag threads all the way through.
+
+The plan said `ClientFactory.create_from_url()`; the 1.1.2 SDK actually exposes
+`create_client(url, ClientConfig(...))`, which is what a2acode's own CLI uses. Same for
+`GetTaskRequest`/`CancelTaskRequest` — they take `id`, not the `name="tasks/{id}"` resource
+form that the guess assumed.
+
+### Backend parameterization
+
+The point of the phase. Test bodies assert protocol behavior only, so they are
+backend-independent; `--backend` (or `@pytest.mark.backend`) picks which one runs. What
+genuinely varies is *which prompt provokes a given behavior* — echo parks on a permission
+request when it sees "sudo", a playback scenario will park for its own scripted reasons — so
+those stimuli are fixtures too (`simple_prompt`, `permission_prompt`, `permission_tool`,
+`denied_marker`, `tool_marker`). Phase 4 should be: write a scenario, add a fixture branch,
+change no test.
+
+### Finding: cancel does not apply to a parked task
+
+Canceling a task sitting in `input-required` returns successfully and does nothing. The
+returned task is still `input_required`, and so is a later `tasks/get`. a2acode's
+`executor.cancel()` does call `updater.cancel()`, so the event seems to go nowhere once the
+task's stream has closed — but that is a hypothesis, not something confirmed. What is
+confirmed is the observable behavior.
+
+Upstream only tests cancel at the `BackendSession` level (`tests/test_smoke.py`), never end to
+end over the protocol, which fits: this path is simply untested there. Recorded as two
+`xfail(strict=True)` tests plus one passing test documenting today's behavior, so the contrast
+is explicit and the xfails flip loudly if it ever gets fixed. Matters for any UI that wants a
+"cancel" button on an approval prompt — right now that button would lie.
+
+### Speed
+
+First green run took 19.7s for 33 tests, because every test booted its own a2acode. Pooling
+servers per `(backend, args)` at session scope dropped it to ~1.3s. `fresh_server_url` is
+there for anything that genuinely needs an untouched process.
+
+### Outcome
+
+31 passed, 2 xfailed, ~1.3s against echo. Exit criterion met. Phase 4 (playback M0) is next
+and needs no key either — and the Phase 2 capture in `docs/captures/` is the shape reference
+the first scenario gets written against.
