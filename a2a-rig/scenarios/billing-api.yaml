@@ -1,0 +1,77 @@
+# A fake billing-api repo that "does" a small feature with a permission gate.
+#
+# Hand-written from the shape of the real Claude run captured in
+# a2a-experiments docs/captures/phase2-claude-run.jsonl: plan, tool activity,
+# a file_change diff artifact, a permission pause, and a terminal result
+# carrying cost/usage. M3 replaces hand-written scenarios like this one with
+# recordings.
+
+name: billing-api
+card:
+  name: billing-api
+  description: "Fake billing-api repo (playback)"
+defaults:
+  delay_ms: 0 # instant unless PLAYBACK_SPEED asks otherwise
+
+plays:
+  # A change the agent wants to verify by running something — the permission
+  # gate is the interesting path, so it matches ahead of the plain turn-1 play.
+  - match: { contains: "run the tests" }
+    events:
+      - plan:
+          steps:
+            - { content: "Add the /health endpoint", status: in_progress }
+            - { content: "Run the test suite", status: pending }
+      - tool_use: { name: Read, input: { file_path: "src/app.py" }, id: t1 }
+      - tool_result: { id: t1, name: Read }
+      - text: "Adding a /health endpoint alongside the existing routes.\n"
+      - file_change:
+          path: "src/app.py"
+          diff: |
+            --- a/src/app.py
+            +++ b/src/app.py
+            @@ -8,6 +8,11 @@
+            +@app.get("/health")
+            +def health():
+            +    return jsonify({"status": "ok"})
+            +
+            +
+             @app.get("/items")
+      - permission:
+          tool: Bash
+          input: { command: "pytest tests/ -q" }
+          description: "$ pytest tests/ -q"
+          on_allow:
+            - tool_use: { name: Bash, input: { command: "pytest tests/ -q" }, id: t2 }
+            - tool_result: { id: t2, name: Bash, output: "42 passed in 0.8s" }
+            - text: "Added /health; 42 tests pass."
+            - result: { cost_usd: 0.0173, num_turns: 4, stop_reason: end_turn }
+          on_deny:
+            - text: "Skipped the test run. The edit to src/app.py is in place but unverified."
+            - result: { cost_usd: 0.0102, num_turns: 3, stop_reason: end_turn }
+
+  # A read-only question: no edits, no gate.
+  - match: { contains: "explain" }
+    events:
+      - thought: "The caller wants a summary, not changes."
+      - tool_use: { name: Read, input: { file_path: "src/tax.py" }, id: t1 }
+      - tool_result: { id: t1, name: Read }
+      - text: "This module computes VAT from a hardcoded rate table."
+      - result: { cost_usd: 0.004, num_turns: 1, stop_reason: end_turn }
+
+  # First message of any conversation that is not one of the above.
+  - match: { turn: 1 }
+    events:
+      - tool_use: { name: Read, input: { file_path: "README.md" }, id: t1 }
+      - tool_result: { id: t1, name: Read }
+      - text: "Looked over the billing-api repo. Ready when you are."
+      - result: { cost_usd: 0.0021, num_turns: 1, stop_reason: end_turn }
+
+  # Catch-all. Must stay last: the loader rejects a non-final default, since
+  # everything after it would be unreachable.
+  - match: {}
+    events:
+      - tool_use: { name: Read, input: { file_path: "README.md" }, id: t1 }
+      - tool_result: { id: t1, name: Read }
+      - text: "Still here. Ready when you are."
+      - result: { cost_usd: 0.001, num_turns: 1, stop_reason: end_turn }

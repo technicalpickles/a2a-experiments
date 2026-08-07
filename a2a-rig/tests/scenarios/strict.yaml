@@ -1,0 +1,8 @@
+# Deliberately has no catch-all play, so anything unscripted fails the turn.
+# Used to prove a mis-scripted test never gets a plausible wrong answer.
+name: strict
+plays:
+  - match: { contains: "known question" }
+    events:
+      - text: "A scripted answer."
+      - result: { cost_usd: 0.001, num_turns: 1, stop_reason: end_turn }
