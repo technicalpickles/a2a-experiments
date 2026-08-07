@@ -9,45 +9,55 @@ touching your Anthropic credential belongs on your machine.
 
 ---
 
-## Phase 0 — Environment and install *(anywhere; ~30 min)*
+## Phase 0 — Environment and install *(anywhere; ~30 min)* ✅ done 2026-08-06
 
 Goal: a2acode running from source, its own tests green, client tools on hand.
 
-- [ ] Prereqs: Python 3.13 (not 3.14-rc — pydantic breaks on the RC), `uv`, Node 20+ (for
+- [x] Prereqs: Python 3.13 (not 3.14-rc — pydantic breaks on the RC), `uv`, Node 20+ (for
       `npx`-launched ACP adapters and a2a-cli).
-- [ ] `git clone https://github.com/kanywst/a2acode && cd a2acode && uv sync --dev`
-      (pin the commit; v0.6.2 is the assessed baseline).
-- [ ] Verify: `uv run pytest -q` → expect **163 passed** (verified 2026-08-05).
-- [ ] Install clients: `npm install -g a2a-cli`; clone
+- [x] `git clone https://github.com/kanywst/a2acode && cd a2acode && uv sync --dev`
+      (pin the commit; v0.6.2 is the assessed baseline). Cloned to `~/github.com/kanywst/a2acode`,
+      already at the v0.6.2 tag.
+- [x] Verify: `uv run pytest -q` → expect **163 passed** (verified 2026-08-05, reconfirmed 2026-08-06).
+- [x] Install clients: `npm install -g a2a-cli`; clone
       [a2a-inspector](https://github.com/a2aproject/a2a-inspector) (`uv sync`,
-      `cd frontend && npm install`).
+      `cd frontend && npm install`). **Note:** the published `a2a-cli` npm package can't talk to
+      a2acode's card shape (SDK version skew — see DEVLOG.md 2026-08-06). It now runs from a
+      patched fork (`~/github.com/technicalpickles/a2a-cli`, branch `a2a-sdk-1.0-migration`)
+      via `npm link`, not the plain npm install.
 
-**Exit:** tests green; `a2acode --help`, `a2a-cli --help`, inspector builds.
+**Exit:** tests green; `a2acode --help`, `a2a-cli --help`, inspector builds. ✅
 
-## Phase 1 — First light: echo backend + existing clients *(anywhere; no key; ~1 hr)*
+## Phase 1 — First light: echo backend + existing clients *(anywhere; no key; ~1 hr)* ✅ done 2026-08-06
 
 Goal: see the full A2A surface working end to end, with clients we didn't write — so later
 failures are attributable to our code, not the stack.
 
-- [ ] `uv run a2acode serve --backend echo` (port 9100).
-- [ ] Card check: `uv run a2acode card`, and raw:
+- [x] `uv run a2acode serve --backend echo` (port 9100).
+- [x] Card check: `uv run a2acode card`, and raw:
       `curl -s localhost:9100/.well-known/agent-card.json | jq .` — note skills, streaming,
-      pushNotifications.
-- [ ] Built-in client: `uv run a2acode call "hello world"` → task id, context id, streamed
+      pushNotifications. Confirmed `streaming: true`, `pushNotifications: true`, 6 skills.
+- [x] Built-in client: `uv run a2acode call "hello world"` → task id, context id, streamed
       echo, `[completed]`.
-- [ ] **Existing TUI:** `a2a-cli chat --server http://localhost:9100/` — interactive session;
-      `/new` to reset; also `a2a-cli send "hi" --wait` and `a2a-cli get <task-id>`.
+- [x] **Existing TUI:** `a2a-cli chat --server http://localhost:9100/` — interactive session;
+      `/new` to reset; also `a2a-cli send "hi" --wait` and `a2a-cli get <task-id>`. Required
+      patching `a2a-cli` to the current `@a2a-js/sdk` (see note above and DEVLOG.md) — the
+      published package can't fetch a2acode's card at all.
 - [ ] **Inspector:** run it, point at `http://localhost:9100/`, confirm card validation
-      passes and watch the raw JSON-RPC/SSE in its debug console while chatting.
-- [ ] Exercise the pause: send a prompt containing `sudo` → task parks in `input-required`;
+      passes and watch the raw JSON-RPC/SSE in its debug console while chatting. **Deferred:**
+      same SDK-skew root cause as a2a-cli, but a2a-inspector's client is built on `a2a-sdk`
+      1.1.2's protobuf-generated message types internally, so fixing it is a real rewrite, not
+      a like-for-like patch. Not blocking — a2a-cli alone satisfies the exit criterion below.
+- [x] Exercise the pause: send a prompt containing `sudo` → task parks in `input-required`;
       answer with `a2acode call "allow" --task <id> --context <id>` (and once with a denial).
-- [ ] Multi-turn: two `call`s sharing `--context`; confirm the second reports continuity.
+      Verified via both `a2acode call` and the patched `a2a-cli chat`.
+- [x] Multi-turn: two `call`s sharing `--context`; confirm the second reports continuity.
 - [ ] Optional sanity (once, not CI): `a2a-tck --sut-host http://localhost:9100` MUST tier;
-      record results as a baseline.
+      record results as a baseline. Skipped for now (optional).
 
 **Exit:** an independent client (a2a-cli or inspector) has driven card discovery, streaming,
 `input-required` round trip, and multi-turn against a2acode. **This is the checkpoint that
-the A2A stack "works in general."**
+the A2A stack "works in general."** ✅ Met via `a2a-cli` (patched fork); inspector left for later.
 
 ## Phase 2 — One real-inference sanity pass *(your machine; API key; ~$1 budget)*
 
