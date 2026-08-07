@@ -14,7 +14,8 @@ out of the same server and protocol mapping, just with the model swapped out.
 
 - **`docs/`** — design, execution plan, and running log. Start with `docs/PLAN.md` for current
   status, `docs/DEVLOG.md` for the narrative behind it, and `docs/DESIGN-v3.md` for the target
-  architecture. `CLAUDE.md` explains how these three documents divide the work.
+  architecture. `docs/UPSTREAM.md` collects the bugs this work has turned up in other
+  people's repos, with repros. `CLAUDE.md` explains how these documents divide the work.
 - **`a2a-rig/`** — the actual code: the `playback` backend and a pytest harness that drives
   a2acode over the real A2A surface. See `a2a-rig/README.md` for how to run it.
 

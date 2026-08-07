@@ -21,7 +21,7 @@ as something to intermix with the docs-only conventions below.
 
 ## How work here is organized
 
-Three documents, three different jobs — don't blend them:
+Each document has one job — don't blend them:
 
 - **`docs/DESIGN-v3.md`** is the plan of record (current architecture and rationale). It
   supersedes `docs/DESIGN.md` (v1) and `docs/DESIGN-v2.md` (v2), which are kept as reference —
@@ -37,6 +37,11 @@ Three documents, three different jobs — don't blend them:
   under dated headings. This is where findings, dead ends, and the reasoning behind
   non-obvious decisions belong — PLAN.md stays terse, DEVLOG.md carries the "why." Append a
   new dated section per work session rather than editing old ones.
+- **`docs/UPSTREAM.md`** tracks findings that belong in someone else's repo (a2a-sdk,
+  a2acode, a2a-cli, a2a-inspector) — the trace, the repro, and the framing each report
+  needs. Taskwarrior holds status and is the actionable backlog; this doc holds the "why"
+  so an issue can be written later without re-deriving it. Add an entry when a DEVLOG
+  finding turns out to be upstream's problem rather than ours.
 - **`docs/captures/`** holds recorded wire traffic, not prose. `phase2-claude-run.jsonl` is
   the Phase 2 real-Claude run (one JSON event per line, protobuf-serialized via
   `MessageToDict`), captured with `dump_stream.py` alongside it. This is the shape reference
