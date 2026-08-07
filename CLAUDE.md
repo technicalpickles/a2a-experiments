@@ -50,6 +50,11 @@ Each document has one job — don't blend them:
   `phase5-acp-plan-run.jsonl` is the ACP-backed run that pins the `plan` artifact contract.
   `phase5-plan-probe.jsonl` plus `phase5-session-tools.json` are the evidence that
   `--backend claude` can't emit plans at all (see `docs/UPSTREAM.md`).
+- **`docs/superpowers/specs/YYYY-MM-DD-*.md`** are per-milestone design specs produced by the
+  `brainstorming` skill before implementation. They settle the questions one milestone opens
+  and are historical once it ships — the architectural decisions in them graduate into
+  DESIGN-v3, which stays the plan of record. Don't edit a shipped spec to reflect what
+  changed; note it in DEVLOG and update DESIGN-v3.
 - **`docs/pass-{1..4}-*.md`** are dated research snapshots (A2A protocol/SDKs, ecosystem
   tooling, Claude Agent SDK, deterministic-backend approaches) that fed the designs. Treat them
   as historical inputs, not living docs — if something in a pass doc turns out stale, the fix
