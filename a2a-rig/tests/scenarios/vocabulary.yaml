@@ -62,3 +62,56 @@ plays:
     events:
       - text: "Here are the first three of the twelve endpoints you asked about"
       - result: { cost_usd: 0.21, num_turns: 1, stop_reason: max_tokens }
+
+  # A plan that moves. Modelled on the real ACP run in a2a-experiments
+  # docs/captures/phase5-acp-plan-run.jsonl: three updates to one artifact,
+  # each replacing the last, with the in-progress step walking down the list.
+  # The claude backend cannot emit any of this today — its plan derivation
+  # keys on a TodoWrite tool that no longer exists in the session.
+  - match: { contains: "show me the plan" }
+    events:
+      - plan:
+          steps:
+            - { content: "Read the failing test", status: in_progress }
+            - { content: "Fix the parser", status: pending }
+            - { content: "Run the suite", status: pending }
+      - text: "The parser drops the trailing field.\n"
+      - plan:
+          steps:
+            - { content: "Read the failing test", status: completed }
+            - { content: "Fix the parser", status: pending, priority: high }
+            - { content: "Run the suite", status: pending }
+      - plan:
+          steps:
+            - { content: "Read the failing test", status: completed }
+            - { content: "Fix the parser", status: completed }
+            - { content: "Run the suite", status: completed }
+      - result: { num_turns: 3, stop_reason: end_turn }
+
+  # An agent that writes prose instead of a checklist. a2acode carries the
+  # markdown through untouched rather than parsing steps out of it.
+  - match: { contains: "in prose" }
+    events:
+      - plan:
+          markdown: |
+            ## Approach
+
+            Start with the parser, then widen to the callers.
+      - result: { num_turns: 1, stop_reason: end_turn }
+
+  # An agent that keeps its plan in a file and just points at it.
+  - match: { contains: "plan in a file" }
+    events:
+      - plan: { uri: "file:///repo/PLAN.md" }
+      - result: { num_turns: 1, stop_reason: end_turn }
+
+  # A plan the agent gives up on. The empty plan still replaces the artifact,
+  # so a frontend stops showing steps nobody is working on.
+  - match: { contains: "abandon the plan" }
+    events:
+      - plan:
+          steps:
+            - { content: "Rewrite the scheduler", status: in_progress }
+      - text: "That is a bigger change than it looked. Backing out.\n"
+      - plan: {}
+      - result: { num_turns: 2, stop_reason: end_turn }

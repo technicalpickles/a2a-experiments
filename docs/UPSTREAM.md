@@ -137,6 +137,47 @@ Also worth mentioning in the same issue: **cancel is only tested at the `Backend
 level, never end to end over the protocol.** That's why this survived 163 tests. Offering that
 observation alongside the bug is more useful than the bug alone.
 
+### The claude backend can no longer emit a `plan` event at all
+
+**Task:** `70dc7c04` · **Evidence:** `docs/captures/phase5-session-tools.json`,
+`docs/captures/phase5-plan-probe.jsonl`
+
+`backends/claude.py` derives the agent's plan from one tool name:
+
+```python
+_PLAN_TOOL = "TodoWrite"   # L60
+```
+
+That tool is not in the session any more. Claude Code 2.1.224, driven through the Claude Agent
+SDK with a2acode's own options (`setting_sources=[]`, no `allowed_tools`), hands the session 29
+tools, and the todo-list ones are `TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`. No
+`TodoWrite`. So `_plan_from_todos` never fires and `--backend claude` produces no `plan`
+artifact under any prompt.
+
+Watched live, not inferred: a three-step feature request against a Flask app ran to
+`completed` over 25 turns with zero plan artifacts, and Claude said so in its own response
+text — "No TodoWrite tool here" — before settling on `TaskCreate`/`TaskUpdate` instead. The
+same prompt against `--backend acp --agent claude` produced three plan updates, so this is the
+claude backend specifically, not the plan pipeline: `_render_plan`, the artifact replacement,
+and the executor's handling are all fine.
+
+**Why 163 tests didn't catch it:** `test_todowrite_yields_a_plan_alongside_the_tool_use` builds
+a synthetic `ToolUseBlock(name="TodoWrite")` by hand. A unit test that supplies the constant it
+is testing can't notice the constant went stale — the test will keep passing after the tool is
+renamed again.
+
+**Fix shape:** recognize the current task tools alongside `TodoWrite` (keep the old name for
+older CLIs — this is a moving target, so a set beats a constant). The mapping is not
+one-for-one: `TodoWrite` carries the whole list in one call, while `TaskCreate`/`TaskUpdate`
+mutate one task at a time, so the backend would have to hold list state across calls to emit a
+`Plan` by replacement the way the dataclass expects.
+
+**Framing note:** lead with the diff — "v0.6.2 emitted plans against Claude Code 2.0.x; against
+2.1.224 it emits none" — and offer the tool-list dump as the evidence. The interesting half of
+the report is the testing gap, not the rename; a follow-up worth suggesting is an integration
+check that asserts the session actually offers whatever tools the backend keys on, since that
+class of break will happen again.
+
 ### Permission deny discards the caller's text
 
 **Task:** `f010f63e` · Small; a nit rather than a bug
@@ -203,3 +244,8 @@ Noted here so the decision not to file is a decision rather than an oversight.
    `5dcde5fb` regardless of that answer, since it's worth fixing either way.
 3. **`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes.
 4. **`cc7feef9` to a2a-cli** any time. The work already exists.
+
+**`70dc7c04` jumps the queue.** It's the only one here that's a plain feature-is-broken report
+rather than a design conversation: reproducible, evidenced by a tool-list dump, and provably
+not the reporter's setup since the ACP backend does the same job fine. Nothing about it waits
+on the SDK cancel answer. File it first, or alongside the a2a-sdk pair.

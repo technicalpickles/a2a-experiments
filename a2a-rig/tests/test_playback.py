@@ -228,6 +228,57 @@ def test_a_timeout_branch_needs_a_timeout_to_reach_it():
         )
 
 
+def test_a_plan_step_needs_content():
+    """`step["content"]` is a hard index in the backend, so a step without one
+    would raise halfway through a turn a frontend is already watching."""
+    with pytest.raises(ScenarioError, match="`content`"):
+        parse(
+            {
+                "name": "s",
+                "plays": [
+                    {
+                        "match": {},
+                        "events": [{"plan": {"steps": [{"status": "pending"}]}}],
+                    }
+                ],
+            }
+        )
+
+
+def test_a_plan_cannot_be_two_things_at_once():
+    """a2acode renders markdown ahead of steps and never mentions the loss, so a
+    scenario written with both would quietly ship a plan the author never read."""
+    with pytest.raises(ScenarioError, match="one of"):
+        parse(
+            {
+                "name": "s",
+                "plays": [
+                    {
+                        "match": {},
+                        "events": [
+                            {
+                                "plan": {
+                                    "steps": [{"content": "step one"}],
+                                    "markdown": "## Plan\n",
+                                }
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+
+def test_an_empty_plan_is_allowed():
+    """It is how an agent says it abandoned the checklist — a2acode replaces the
+    artifact with nothing rather than leaving a stale plan on screen."""
+    scenario = parse(
+        {"name": "s", "plays": [{"match": {}, "events": [{"plan": {}}]}]}
+    )
+
+    assert scenario.select("anything", 1).events == [{"plan": {}}]
+
+
 def test_a_catch_all_that_is_not_last_is_rejected():
     """Otherwise the plays after it silently never run."""
     with pytest.raises(ScenarioError, match="unreachable"):
@@ -552,6 +603,94 @@ async def test_an_expired_approval_answers_a_late_caller_with_the_timeout_branch
 
     assert "production is untouched" in resumed.artifact_text()
     assert resumed.completion_metadata.get("stop_reason") == "permission_timeout"
+
+
+# --- Plans -----------------------------------------------------------------
+#
+# Shape pinned against a real ACP-backed Claude run — see a2a-experiments
+# docs/captures/phase5-acp-plan-run.jsonl. Three plan updates, one artifact id,
+# `- [ ]` / `- [>]` / `- [x]` as the marks. The claude backend cannot produce
+# one of these at all today (docs/UPSTREAM.md), which is the reason a frontend
+# needs the scripted path rather than a live one.
+
+
+def _plans(capture) -> list:
+    return [a for a in capture.artifacts if a.name == "plan"]
+
+
+async def test_a_plan_arrives_as_a_markdown_checklist(on_scenario):
+    """The whole reason to watch a plan: which step the agent is on."""
+    client = await on_scenario("vocabulary.yaml")
+
+    capture = await send(client, "show me the plan")
+
+    first = _plans(capture)[0]
+    assert first.parts[0].media_type == "text/markdown"
+    assert parts_text(first.parts) == (
+        "- [>] Read the failing test\n"
+        "- [ ] Fix the parser\n"
+        "- [ ] Run the suite\n"
+    )
+
+
+async def test_a_plan_update_replaces_the_one_before_it(on_scenario):
+    """Reported by replacement, not by delta. A consumer that appended these
+    would show the same three steps three times over."""
+    client = await on_scenario("vocabulary.yaml")
+
+    capture = await send(client, "show me the plan")
+
+    plans = _plans(capture)
+    assert len(plans) == 3
+    assert len({p.artifact_id for p in plans}) == 1
+    assert parts_text(plans[-1].parts) == (
+        "- [x] Read the failing test\n"
+        "- [x] Fix the parser\n"
+        "- [x] Run the suite\n"
+    )
+
+
+async def test_a_high_priority_step_says_so(on_scenario):
+    """`priority` is the one PlanStep field the ACP run never exercised, so it
+    is scripted here rather than assumed."""
+    client = await on_scenario("vocabulary.yaml")
+
+    capture = await send(client, "show me the plan")
+
+    assert "- [ ] (high) Fix the parser" in parts_text(_plans(capture)[1].parts)
+
+
+async def test_a_prose_plan_is_carried_verbatim(on_scenario):
+    """Not every agent keeps a checklist. Flattening prose into invented steps
+    would be the rig lying about what the agent said."""
+    client = await on_scenario("vocabulary.yaml")
+
+    capture = await send(client, "plan this out in prose")
+
+    assert parts_text(_plans(capture)[0].parts) == (
+        "## Approach\n\nStart with the parser, then widen to the callers.\n"
+    )
+
+
+async def test_a_plan_kept_in_a_file_arrives_as_a_pointer(on_scenario):
+    """The third Plan variant: the agent's plan lives somewhere else."""
+    client = await on_scenario("vocabulary.yaml")
+
+    capture = await send(client, "keep the plan in a file")
+
+    assert "PLAN.md" in parts_text(_plans(capture)[0].parts)
+
+
+async def test_an_abandoned_plan_clears_the_checklist(on_scenario):
+    """A frontend that keeps rendering a plan the agent walked away from is
+    showing work that is not happening."""
+    client = await on_scenario("vocabulary.yaml")
+
+    capture = await send(client, "abandon the plan")
+
+    plans = _plans(capture)
+    assert len(plans) == 2
+    assert parts_text(plans[-1].parts) == ""
 
 
 async def test_stop_reason_reaches_the_client(on_scenario):

@@ -473,3 +473,94 @@ lives in `tests/test_playback.py`, which is playback-pinned by module marker. Tw
 worth knowing about — an `on_scenario` fixture that pools servers per (scenario, env), and a
 small in-process section that drives `BackendSession` directly, because permission timeouts
 and scripted failures are decided at that seam rather than on the wire.
+
+## 2026-08-07 — Phase 5 finished: the plan capture found the plan path broken
+
+Picked up the one thing Phase 5 left open: `plan` events, deferred on taskwarrior `fb20c22b`
+because no real `TodoWrite`-derived plan had ever been observed and scripting against an
+unwatched code path is how mocks start drifting. The plan was to spend ~$0.30 of inference,
+watch one, and script against it.
+
+### What the capture actually found
+
+There is no `TodoWrite` tool to watch. a2acode's claude backend derives plans from exactly one
+tool name (`_PLAN_TOOL = "TodoWrite"`, `backends/claude.py:60`), and current Claude Code
+(2.1.224) doesn't put that tool in the session. It offers `TaskCreate` / `TaskUpdate` /
+`TaskList` / `TaskGet` instead.
+
+Watched it happen first, then confirmed it properly rather than trusting the model's prose. The
+run itself said "No TodoWrite tool here" in its response text and went off to use `TaskCreate`;
+it then completed all three requested steps over 25 turns with zero plan artifacts
+(`docs/captures/phase5-plan-probe.jsonl`). The confirmation is `docs/captures/phase5-session-tools.json`
+— a2acode drops the SDK's init `SystemMessage` on the floor (`events_from_message` maps only
+Assistant/User/Result), so getting an authoritative tool list meant opening a session directly
+with the same `ClaudeAgentOptions` a2acode builds. 29 tools, no `TodoWrite`.
+
+So `--backend claude` cannot emit a `plan` event under any prompt. Filed as taskwarrior
+`70dc7c04` with the full framing in `docs/UPSTREAM.md`.
+
+**Why a2acode's 163 tests don't catch it:** `test_todowrite_yields_a_plan_alongside_the_tool_use`
+hand-builds a `ToolUseBlock(name="TodoWrite")`. A unit test that supplies the very constant it
+is testing cannot notice that constant going stale — it'll keep passing through the next rename
+too. That testing-gap observation is the more useful half of the report; the rename alone is a
+one-line fix.
+
+### Getting the shape anyway, via ACP
+
+Same prompt, same repo, `--backend acp --agent claude`: three plan updates, cleanly
+(`docs/captures/phase5-acp-plan-run.jsonl`, $0.17). ACP models plans as first-class session
+updates, so `acp.py`'s `_plan_content` maps them onto the same `Plan` dataclass the claude
+backend was supposed to produce. That isolates the break to the claude backend — `_render_plan`,
+the artifact machinery, and the executor are all healthy.
+
+The observed wire contract, now pinned by test:
+
+- artifact `name: "plan"`, one part, `media_type: "text/markdown"`
+- **one `artifact_id` across all three updates**, `append` unset, `last_chunk: true` — reported
+  by replacement, so a consumer that appended would render the same steps three times
+- marks are `- [ ]` / `- [>]` / `- [x]`, matching `_PLAN_MARKS = {"completed": "x", "in_progress": ">"}`
+
+`priority` never appeared in the real run, so it's scripted rather than assumed, and flagged as
+such in the test.
+
+### Then the scripted side needed almost nothing
+
+The six end-to-end plan tests passed the first time they ran. playback's `plan` support (written
+in Phase 4 against a2acode's dataclass) already matched the shape the wire produces — which is
+the DESIGN-v3 §3 bet paying out. Emitting into a2acode's real executor means the rig gets the
+artifact contract for free instead of reimplementing it and drifting.
+
+What did need writing was validation, and it's the same class of bug as Phase 5's `delay_ms`
+find:
+
+- a `plan` with both `steps` and `markdown` was accepted, and a2acode's renderer prefers
+  markdown and drops the steps **without a word**. A scenario author would ship a plan they
+  never wrote.
+- a step missing `content` would `KeyError` mid-turn, in front of a frontend already watching
+  the stream, rather than at server start.
+
+An empty plan stays legal — it's how an agent says it abandoned the checklist, and a2acode
+replaces the artifact with nothing so a stale plan doesn't linger on screen. There's a test for
+that path too, since "the plan disappeared" is a thing a frontend has to render correctly.
+
+### Two side findings
+
+- **`dump_stream.py` is not what corrupted the Phase 2 capture.** `phase2-claude-run.jsonl` has
+  4 lines that don't parse (raw newlines inside diff strings). Both captures written this
+  session parse clean at 84 and 44 events, so the mangling happened to that file after the
+  fact, not in the dumper.
+- **The ACP run never hit a permission gate**, while the claude-backend run gated seven times
+  (needing an auto-allow loop to get through). Not chased down; noted because it means the two
+  backends do not present the same approval surface to a caller, which matters if the rig ever
+  claims to model "a2acode" rather than "a2acode with backend X".
+
+### Where it stands
+
+79 passed, 4 xfailed against both `echo` and `playback`, under 5s each (was 70/4). Test-body
+separation held for the third time running: the backend-agnostic suite needed zero edits, and
+everything new lives in `tests/test_playback.py`.
+
+**Phase 5 (M1) is done.** The odd part is where it landed: a frontend can now develop plan
+views against the rig that the real producer cannot currently generate. That's not the rig
+drifting from reality — it's the rig holding the contract a2acode intends and upstream having
+broken its own half. Which is a decent argument for the whole approach.

@@ -189,6 +189,38 @@ def message_of(body: Any) -> str:
     return ""
 
 
+def _validate_plan(body: Any, play_index: int, where: str) -> None:
+    """A plan is one of three things, or nothing at all.
+
+    An empty plan is legitimate — it is how an agent says it abandoned the
+    checklist. Two of them at once is not: a2acode's renderer prefers markdown,
+    then uri, and drops whatever else was set without a word, so a scenario
+    written with both would ship a plan its author never actually wrote.
+    """
+    if body is None:
+        return
+    if not isinstance(body, dict):
+        raise ScenarioError(f"{where}: play #{play_index} `plan` should be a mapping")
+
+    set_fields = [f for f in ("steps", "markdown", "uri") if body.get(f)]
+    if len(set_fields) > 1:
+        raise ScenarioError(
+            f"{where}: play #{play_index} `plan` sets {sorted(set_fields)}; a plan "
+            f"is one of `steps`, `markdown`, or `uri`. a2acode renders the first "
+            f"of those it finds and discards the rest"
+        )
+
+    steps = body.get("steps") or []
+    if not isinstance(steps, list):
+        raise ScenarioError(f"{where}: play #{play_index} `plan.steps` should be a list")
+    for position, step in enumerate(steps, start=1):
+        if not isinstance(step, dict) or not step.get("content"):
+            raise ScenarioError(
+                f"{where}: play #{play_index} `plan` step #{position} needs "
+                f"`content` — the line a reader actually sees"
+            )
+
+
 def _validate_event(event: Any, play_index: int, where: str) -> None:
     if not isinstance(event, dict) or len(event) != 1:
         raise ScenarioError(
@@ -206,6 +238,8 @@ def _validate_event(event: Any, play_index: int, where: str) -> None:
             f"{where}: play #{play_index} `error` needs a message saying how the "
             f"run failed"
         )
+    if kind == "plan":
+        _validate_plan(body, play_index, where)
     if kind == "permission":
         if not isinstance(body, dict):
             raise ScenarioError(

@@ -42,10 +42,14 @@ Each document has one job — don't blend them:
   needs. Taskwarrior holds status and is the actionable backlog; this doc holds the "why"
   so an issue can be written later without re-deriving it. Add an entry when a DEVLOG
   finding turns out to be upstream's problem rather than ours.
-- **`docs/captures/`** holds recorded wire traffic, not prose. `phase2-claude-run.jsonl` is
-  the Phase 2 real-Claude run (one JSON event per line, protobuf-serialized via
-  `MessageToDict`), captured with `dump_stream.py` alongside it. This is the shape reference
-  scenario YAML gets written against in Phases 4–5, until `--record` replaces it in Phase 7.
+- **`docs/captures/`** holds recorded wire traffic, not prose — one JSON event per line,
+  protobuf-serialized via `MessageToDict`, captured with `dump_stream.py` alongside them.
+  These are the shape reference scenario YAML gets written against in Phases 4–5, until
+  `--record` replaces them in Phase 7. `phase2-claude-run.jsonl` is the Phase 2 real-Claude
+  run (note: 4 of its lines don't parse, mangled after the fact — the dumper is fine).
+  `phase5-acp-plan-run.jsonl` is the ACP-backed run that pins the `plan` artifact contract.
+  `phase5-plan-probe.jsonl` plus `phase5-session-tools.json` are the evidence that
+  `--backend claude` can't emit plans at all (see `docs/UPSTREAM.md`).
 - **`docs/pass-{1..4}-*.md`** are dated research snapshots (A2A protocol/SDKs, ecosystem
   tooling, Claude Agent SDK, deterministic-backend approaches) that fed the designs. Treat them
   as historical inputs, not living docs — if something in a pass doc turns out stale, the fix

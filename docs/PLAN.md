@@ -157,10 +157,16 @@ inference and sub-second turns. **From here, frontend development can start for 
 - [x] `error`/`stop_reason` variants. `error` raises a `ScriptedError` rather than emitting,
       so the task fails through a2acode's real failure path; `stop_reason` was already
       plumbed and is now pinned by a test.
-- [ ] `plan`, `thought`, `file_change`, `notice` events. `thought`/`file_change`/`notice` are
-      implemented and covered incidentally by the Phase 4 scenario; **`plan` is deferred**
-      until taskwarrior `fb20c22b` captures a real `TodoWrite`-derived plan event, since
-      scripting it now would be writing against a code path nobody has watched run.
+- [x] `plan`, `thought`, `file_change`, `notice` events. `thought`/`file_change`/`notice` are
+      implemented and covered incidentally by the Phase 4 scenario. `plan` was deferred on
+      taskwarrior `fb20c22b` pending a real capture; that capture found the opposite of what
+      it went looking for. **a2acode's claude backend can no longer emit a plan at all** — it
+      keys on a `TodoWrite` tool that current Claude Code (2.1.224) doesn't put in the session
+      (taskwarrior `70dc7c04`, `docs/UPSTREAM.md`). The shape was captured through
+      `--backend acp` instead, which emits plans as first-class session updates:
+      `docs/captures/phase5-acp-plan-run.jsonl`. Scenario and tests are pinned to that.
+      Added along the way: `plan` validation (a plan is one of `steps`/`markdown`/`uri`, and
+      a step needs `content`), since a2acode's renderer silently discards the losers.
 - [x] `delay_ms` + `PLAYBACK_SPEED` under test. Fixed along the way: `delay_ms` on a
       `permission` event was silently ignored, because the delay ran after the event
       dispatch rather than before it.
@@ -173,9 +179,11 @@ inference and sub-second turns. **From here, frontend development can start for 
 - [x] Harness tests for each (the permission/deny/timeout tests you could never run reliably
       against live inference).
 
-**Exit:** a UI can build chat, diff, and approval views entirely offline. ✅ for chat, diffs,
-approvals (including the abandoned-approval and mid-run-failure paths); plan views wait on
-`fb20c22b`. 70 passed, 4 xfailed against both `echo` and `playback`, under 5s each.
+**Exit:** ✅ a UI can build chat, diff, approval, and plan views entirely offline — including
+the abandoned-approval, mid-run-failure, and abandoned-plan paths. 79 passed, 4 xfailed
+against both `echo` and `playback`, under 5s each. Plan views are the one place the rig is
+now *ahead* of the real producer rather than level with it: a frontend can develop against
+scripted plans that `--backend claude` cannot currently produce.
 
 ## Phase 6 — M2: multi-repo rig + your consumers *(anywhere)*
 
