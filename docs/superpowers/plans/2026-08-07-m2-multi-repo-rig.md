@@ -1417,7 +1417,7 @@ async def test_three_repos_are_driveable_inside_the_phase_budget(repos):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_rig.py -v -k fixture or budget`
+Run: `uv run pytest tests/test_rig.py -v -k "fixture or budget or independently"`
 Expected: FAIL with `fixture 'repos' not found`
 
 - [ ] **Step 3: Write the fixture**
@@ -1617,10 +1617,12 @@ directory name is the id, and that consumers read the index at `/`.
 
 Run:
 ```bash
-grep -rn "\-\-scenario\|scenarios/billing-api" docs/ CLAUDE.md a2a-rig/README.md
+grep -rn "\-\-scenario\|scenarios/billing-api" docs/ CLAUDE.md a2a-rig/README.md \
+  --exclude-dir=superpowers
 ```
-Expected: no hits except in DEVLOG entries describing past work and in the M2 spec, both of
-which are historical records and must not be rewritten.
+Expected: no hits except in DEVLOG entries describing past work. `docs/superpowers/` is
+excluded because the M2 spec and this plan are historical records of how the change was
+decided and must not be rewritten to match the outcome.
 
 - [ ] **Step 7: Final verification**
 
