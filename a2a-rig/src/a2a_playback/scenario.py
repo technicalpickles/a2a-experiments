@@ -1,19 +1,23 @@
-"""Scenario files: parse, validate, and select a play for an incoming message.
+"""Scenario files: parse and validate one document of plays.
 
-The format is DESIGN-v3 §4 — a list of *plays*, each with match rules and a list
-of events written in a2acode's own ``BackendEvent`` vocabulary. Keeping the
-vocabulary identical is what will let recorded scenarios (M3) and hand-written
-ones be the same thing.
+A scenario is a *script*, and only a script — a list of **plays**, each with
+match rules and a list of events written in a2acode's own ``BackendEvent``
+vocabulary. Who the agent running it is, and how it is paced, live in
+``repo.py``: a repo has scenarios, it is not one. Keeping the vocabulary
+identical to a2acode's is what will let recorded scenarios (M3) and
+hand-written ones be the same format.
 
 Validation is deliberately strict and up-front. A scenario with a typo'd event
 name should fail when the server starts, not halfway through a turn that a
-frontend is watching.
+frontend is watching. The one rule that is *not* here is
+catch-all-must-be-last: that is a property of a repo's whole concatenated play
+list, so it lives in ``repo.py``.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -80,30 +84,13 @@ class Play:
 
 @dataclass
 class Scenario:
-    name: str
+    """One document of plays, and where it came from."""
+
     plays: list[Play]
-    card_name: str | None = None
-    card_description: str | None = None
-    defaults: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
 
-    @property
-    def default_delay_ms(self) -> float:
-        return float(self.defaults.get("delay_ms", 0) or 0)
 
-    def select(self, prompt: str, turn: int) -> Play:
-        """First match wins. No match is an error, never a plausible answer."""
-        for play in self.plays:
-            if play.match.matches(prompt, turn):
-                return play
-        raise ScenarioError(
-            f"scenario {self.name!r}: no play matched turn {turn} of {prompt!r}. "
-            f"Add a matching play, or a `- match: {{}}` default if you want a "
-            f"catch-all. Refusing to guess."
-        )
-
-
-def load(path: str | Path) -> Scenario:
+def load_scenario(path: str | Path) -> Scenario:
     path = Path(path)
     try:
         raw = yaml.safe_load(path.read_text())
@@ -111,38 +98,26 @@ def load(path: str | Path) -> Scenario:
         raise ScenarioError(f"{path}: invalid YAML: {exc}") from exc
     if not isinstance(raw, dict):
         raise ScenarioError(f"{path}: expected a mapping at the top level")
-    return parse(raw, path=path)
+    return parse_scenario(raw, path=path)
 
 
-def parse(raw: dict[str, Any], *, path: Path | None = None) -> Scenario:
+def parse_scenario(raw: dict[str, Any], *, path: Path | None = None) -> Scenario:
     where = str(path) if path else "<scenario>"
-
-    name = raw.get("name")
-    if not name:
-        raise ScenarioError(f"{where}: scenario needs a `name`")
 
     raw_plays = raw.get("plays")
     if not isinstance(raw_plays, list) or not raw_plays:
         raise ScenarioError(f"{where}: scenario needs a non-empty `plays` list")
 
-    plays = [_parse_play(p, i, where) for i, p in enumerate(raw_plays, start=1)]
+    unknown = set(raw) - {"plays"}
+    if unknown:
+        raise ScenarioError(
+            f"{where}: scenario has unexpected keys {sorted(unknown)}; a scenario "
+            f"holds `plays` and nothing else — identity and defaults belong in "
+            f"repo.yaml"
+        )
 
-    # A default play after which nothing can ever match is a scenario bug worth
-    # naming, since the shadowed plays would silently never run.
-    for play in plays[:-1]:
-        if play.match.is_default:
-            raise ScenarioError(
-                f"{where}: {play.describe()} is a catch-all but is not last; "
-                f"every play after it is unreachable"
-            )
-
-    card = raw.get("card") or {}
     return Scenario(
-        name=str(name),
-        plays=plays,
-        card_name=card.get("name"),
-        card_description=card.get("description"),
-        defaults=raw.get("defaults") or {},
+        plays=[_parse_play(p, i, where) for i, p in enumerate(raw_plays, start=1)],
         path=path,
     )
 
