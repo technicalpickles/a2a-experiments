@@ -211,16 +211,42 @@ change no test.
 ### Finding: cancel does not apply to a parked task
 
 Canceling a task sitting in `input-required` returns successfully and does nothing. The
-returned task is still `input_required`, and so is a later `tasks/get`. a2acode's
-`executor.cancel()` does call `updater.cancel()`, so the event seems to go nowhere once the
-task's stream has closed — but that is a hypothesis, not something confirmed. What is
-confirmed is the observable behavior.
+returned task is still `input_required`, and so is a later `tasks/get`. Traced through all
+three layers rather than left as a guess:
 
-Upstream only tests cancel at the `BackendSession` level (`tests/test_smoke.py`), never end to
-end over the protocol, which fits: this path is simply untested there. Recorded as two
-`xfail(strict=True)` tests plus one passing test documenting today's behavior, so the contrast
-is explicit and the xfails flip loudly if it ever gets fixed. Matters for any UI that wants a
-"cancel" button on an approval prompt — right now that button would lie.
+**The protocol is fine.** `input-required` is an interrupted, non-terminal state, and
+`TaskNotCancelableError` exists specifically to distinguish terminal ones. The spec expects
+cancel to work here; it is the contract both layers below fail to honor.
+
+**a2acode parks by returning.** `executor.py` ends the `execute()` call on a permission
+pause (`if not session.done: return`, commented "keep the stream for the follow-up"), holding
+the live `BackendSession` out of band in `self._live`. That is deliberate and is exactly what
+lets one round trip span two separate `execute()` calls — but it means the producer looks
+finished to the layer above.
+
+**a2a-sdk V2 is where it actually breaks.** Note `DefaultRequestHandler` is aliased to
+`DefaultRequestHandlerV2` (`request_handlers/__init__.py`), so the V1 file is dead code — worth
+knowing before reading that source. Two problems:
+
+1. `ActiveTask.cancel` (`agent_execution/active_task.py`) only does anything
+   `if not self._is_finished.is_set() and self._producer_task`; otherwise it logs
+   "Task already finished … not cancelling" and returns the task untouched. It treats
+   *cancelable* as "has a running producer" rather than "is not terminal". `_is_finished` is
+   set "EXACTLY ONCE when the consumer loop exits", which a parked a2acode task has done.
+2. V2's `on_cancel_task` dropped the guard V1 ended with —
+   `if result.status.state != TASK_STATE_CANCELED: raise TaskNotCancelableError(...)`. So
+   instead of a wrong-but-loud error, the caller gets a success carrying a non-canceled task.
+
+Under V1 this would have been a `TaskNotCancelableError`. The silent success is a V2
+regression; a2acode's design choice is what walks into it. Two different upstreams, two
+different bugs — tracked separately in taskwarrior.
+
+Also worth noting a2acode only tests cancel at the `BackendSession` level
+(`tests/test_smoke.py`), never end to end over the protocol, which is why this went unnoticed
+there. Recorded as two `xfail(strict=True)` tests plus one passing test documenting today's
+behavior, so the contrast is explicit and the xfails flip loudly if either side fixes it.
+Matters for any UI that wants a "cancel" button on an approval prompt — right now that button
+would lie.
 
 ### Speed
 
