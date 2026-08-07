@@ -1,0 +1,8 @@
+# An infrastructure repo, where the interesting path is a change nobody should
+# apply without looking. Its default play fails, so a consumer has a repo that
+# models "this went wrong" without needing a special prompt.
+card:
+  name: infra-terraform
+  description: "Fake infra-terraform repo (playback)"
+defaults:
+  delay_ms: 0

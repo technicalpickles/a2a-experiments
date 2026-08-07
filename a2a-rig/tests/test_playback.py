@@ -280,7 +280,6 @@ def test_scenario_needs_plays():
         parse_scenario({"plays": []})
 
 
-@pytest.mark.xfail(reason="shipped repos land in repos-ship", strict=True)
 def test_shipped_repos_load():
     """The repo library the harness ships should always be loadable."""
     repos = load_repos(Path(__file__).parents[1] / "repos")

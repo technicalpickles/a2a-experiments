@@ -1,0 +1,7 @@
+# A frontend repo. Exists so a consumer has two repos that answer the same
+# prompt differently — the thing a multi-repo rig is for.
+card:
+  name: checkout-web
+  description: "Fake checkout-web repo (playback)"
+defaults:
+  delay_ms: 0

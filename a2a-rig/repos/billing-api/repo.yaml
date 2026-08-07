@@ -1,10 +1,8 @@
 # A fake billing-api repo that "does" a small feature with a permission gate.
 #
 # Hand-written from the shape of the real Claude run captured in
-# a2a-experiments docs/captures/phase2-claude-run.jsonl: plan, tool activity,
-# a file_change diff artifact, a permission pause, and a terminal result
-# carrying cost/usage. M3 replaces hand-written scenarios like this one with
-# recordings.
+# a2a-experiments docs/captures/phase2-claude-run.jsonl. M3 replaces
+# hand-written repos like this one with recordings.
 card:
   name: billing-api
   description: "Fake billing-api repo (playback)"

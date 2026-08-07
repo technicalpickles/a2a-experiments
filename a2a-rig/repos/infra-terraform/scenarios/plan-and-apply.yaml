@@ -1,0 +1,42 @@
+plays:
+  # The gate that matters: a plan a human should read before applying.
+  - match: { contains: "apply" }
+    events:
+      - tool_use: { name: Bash, input: { command: "terraform plan" }, id: t1 }
+      - tool_result:
+          id: t1
+          name: Bash
+          output: "Plan: 2 to add, 1 to change, 1 to destroy."
+      - text: "One resource gets destroyed. Reading the plan before applying.\n"
+      - permission:
+          tool: Bash
+          input: { command: "terraform apply -auto-approve" }
+          description: "$ terraform apply -auto-approve"
+          timeout_ms: 300
+          on_allow:
+            - tool_use:
+                name: Bash
+                input: { command: "terraform apply -auto-approve" }
+                id: t2
+            - tool_result: { id: t2, name: Bash, output: "Apply complete!" }
+            - text: "Applied."
+            - result: { num_turns: 3, stop_reason: end_turn }
+          on_deny:
+            - text: "Left the infrastructure alone."
+            - result: { num_turns: 3, stop_reason: end_turn }
+          on_timeout:
+            - notice: "No answer in time; treating the apply as declined."
+            - text: "Nobody signed off, so nothing was applied."
+            - result: { num_turns: 3, stop_reason: permission_timeout }
+
+  # A run that dies partway, as the default: a consumer gets a failing repo
+  # without having to know a magic phrase.
+  - match: {}
+    events:
+      - tool_use: { name: Bash, input: { command: "terraform init" }, id: t1 }
+      - tool_result:
+          id: t1
+          name: Bash
+          failed: true
+          output: "Error: Failed to query available provider packages"
+      - error: "terraform init could not reach the provider registry"
