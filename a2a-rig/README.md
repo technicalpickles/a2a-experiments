@@ -21,7 +21,7 @@ uv run pytest                      # against a2acode's echo backend
 uv run pytest --backend playback   # against a scripted fake repo
 ```
 
-Expect 50 passed, 2 xfailed, in under two seconds either way.
+Expect 108 passed, 4 xfailed, in under seven seconds either way.
 
 ### Running the rig
 

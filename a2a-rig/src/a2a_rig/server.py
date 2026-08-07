@@ -98,6 +98,12 @@ def _playback_command(
     Uses the running interpreter rather than a console script so the harness
     works from a bare checkout without an install step.
     """
+    if repo and repos:
+        # rig-serve's own CLI treats this combination as an error (`parser.error`
+        # in a2a_playback.serve.main); picking `repos` silently here would mean
+        # the same both-passed call decided differently depending on which
+        # entry point ran it.
+        raise ValueError("pass at most one of repo or repos, not both")
     selector = ["--repos", str(repos)] if repos else ["--repo", str(repo or DEFAULT_REPO)]
     return [
         sys.executable,

@@ -135,6 +135,8 @@ Goal: DESIGN-v3's centerpiece, minimum vocabulary. Out-of-tree, importing a2acod
       (`on_allow`/`on_deny`) landed too; `timeout_ms` did not, so it stays M1.
 - [x] Serve wrapper: `rig-serve --scenario scenarios/billing-api.yaml --port 9200` (thin
       script passing the backend into a2acode's `build_app()`).
+      (`--scenario` was replaced by `--repo`/`--repos` in Phase 6; see `a2a-rig/README.md`
+      for the current invocation.)
 - [x] `billing-api.yaml` hand-written from the Phase 2 transcript's shape.
 - [x] Point the Phase 3 harness at it (backend param flip) — all tests green, now in ms.
       **Zero test bodies changed**, which was the Phase 3 bet paying off; only fixtures gained

@@ -122,5 +122,6 @@ def _reject_shadowed_plays(repo: Repo) -> None:
         if play.match.is_default:
             raise RepoError(
                 f"{scenario.path}: {play.describe()} is a catch-all but is not "
-                f"last in repo {repo.repo_id!r}; every play after it is unreachable"
+                f"last in repo {repo.repo_id!r} ({repo.path}); every play after "
+                f"it is unreachable"
             )

@@ -593,11 +593,14 @@ nothing else; the directory name is the repo id, so there is exactly one source 
 
 The plan's flagged central risk was retired first, before anything else got built on top of
 it: Starlette does not run a mounted sub-app's lifespan, only the lifespan of the app actually
-being served. a2acode initializes its task and push-notification stores inside a lifespan, so
-mounting N repos under one Starlette app the naive way means N repos silently answering
-requests against uninitialized stores. `src/a2a_playback/mounting.py` runs every child app's
-lifespan by hand via an `AsyncExitStack`, so one process serving many repos gets the same
-store initialization a single `--repo` process gets for free.
+being served. The original reasoning here was wrong and was caught in final review: a2acode's
+task and push-notification stores are constructed eagerly in `build_app()`, not inside the
+lifespan, so mounting N repos the naive way does not leave them answering against
+uninitialized stores. What an un-run child lifespan actually costs is shutdown — its `finally`
+block is what closes each backend and its push-notification client, and a lifespan that never
+runs never runs that either. `src/a2a_playback/mounting.py` runs every child app's lifespan by
+hand via an `AsyncExitStack`, so one process serving many repos gets the same startup-and-
+shutdown symmetry a single `--repo` process gets for free.
 
 A nice corroboration showed up sideways: the decision that the rig serves **no agent card at
 the root** (`/` is the index, not a card — the rig is a directory of agents, not an agent)

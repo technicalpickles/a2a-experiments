@@ -15,8 +15,10 @@ import pytest_asyncio
 from a2a.client import create_client
 from a2a.client.client import ClientConfig
 
+from conftest import Rig
+
 from a2a_playback.repo import load_repos
-from a2a_playback.serve import index_document
+from a2a_playback.serve import index_document, repo_mount_path
 from a2a_rig.events import send
 from a2a_rig.server import serve
 
@@ -50,8 +52,10 @@ def test_card_urls_are_absolute():
     """So the same document describes N ports as easily as N paths."""
     document = index_document(load_repos(REPOS), "http://127.0.0.1:9200/")
 
-    for entry in document["repos"]:
-        assert entry["card_url"].startswith("http://127.0.0.1:9200/repos/")
+    for entry, repo in zip(document["repos"], load_repos(REPOS)):
+        assert entry["card_url"].startswith(
+            f"http://127.0.0.1:9200{repo_mount_path(repo.repo_id)}/"
+        )
         assert entry["card_url"].endswith("/.well-known/agent-card.json")
 
 
@@ -101,6 +105,50 @@ async def test_two_repos_serve_different_content(rig_url, http_client):
 
     answered = await send(strict, "the known question")
     unmatched = await send(vocabulary, "the known question")
+
+    assert "A scripted answer." in answered.artifact_text()
+    assert unmatched.final_state == "failed"
+
+
+async def test_the_index_is_the_contract_the_topology_is_swappable(http_client):
+    """Pins the whole reason `--repo` was kept once `--repos` existed: a
+    consumer that only ever reads the index cannot tell N repos mounted under
+    one process from N repos each on their own standalone port, because the
+    index is all it looks at.
+
+    Boots `vocabulary` and `strict` as two independent single-repo processes
+    (not through the mounted `--repos` rig this file otherwise tests), then
+    hand-builds an index document pointing at their two standalone root card
+    URLs and hands it to the same `Rig` helper the shared `repos` fixture
+    uses. If the two repos still answer with their own two different scripted
+    answers through that helper, the index abstraction is honest — it does
+    not secretly depend on the mounted-path topology to work.
+    """
+    with (
+        serve(backend="playback", repo=REPOS / "vocabulary") as vocabulary_url,
+        serve(backend="playback", repo=REPOS / "strict") as strict_url,
+    ):
+        index = {
+            "repos": [
+                {
+                    "name": "vocabulary",
+                    "description": "",
+                    "card_url": f"{vocabulary_url}.well-known/agent-card.json",
+                },
+                {
+                    "name": "strict",
+                    "description": "",
+                    "card_url": f"{strict_url}.well-known/agent-card.json",
+                },
+            ]
+        }
+        rig = Rig(vocabulary_url, index, http_client)
+
+        vocabulary = await rig.client("vocabulary")
+        strict = await rig.client("strict")
+
+        answered = await send(strict, "the known question")
+        unmatched = await send(vocabulary, "the known question")
 
     assert "A scripted answer." in answered.artifact_text()
     assert unmatched.final_state == "failed"

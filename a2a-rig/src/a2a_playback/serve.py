@@ -22,7 +22,16 @@ from .repo import Repo, RepoError, load_repo, load_repos
 from .scenario import ScenarioError
 
 
-def build_repo_app(repo, *, url: str):
+def repo_mount_path(repo_id: str) -> str:
+    """Where a repo lives under a multi-repo rig: mount point and card URL alike.
+
+    One helper so the mount and the URL the index advertises for it cannot
+    drift apart — they used to be spelled separately in three places.
+    """
+    return f"/repos/{repo_id}"
+
+
+def build_repo_app(repo: Repo, *, url: str):
     """One repo's a2acode app, with the playback backend injected."""
     backend = PlaybackBackend(repo)
     return build_app(
@@ -51,7 +60,8 @@ def index_document(repos: list[Repo], base_url: str) -> dict:
                 "name": repo.repo_id,
                 "description": repo.card_description or "",
                 "card_url": (
-                    f"{base}/repos/{repo.repo_id}/.well-known/agent-card.json"
+                    f"{base}{repo_mount_path(repo.repo_id)}/"
+                    ".well-known/agent-card.json"
                 ),
             }
             for repo in repos
@@ -73,15 +83,17 @@ def build_rig_app(repos: list[Repo], *, base_url: str):
         return JSONResponse(document)
 
     children = [
-        build_repo_app(repo, url=f"{base}/repos/{repo.repo_id}/") for repo in repos
+        build_repo_app(repo, url=f"{base}{repo_mount_path(repo.repo_id)}/")
+        for repo in repos
     ]
     routes = [Route("/", index)]
     routes += [
-        Mount(f"/repos/{repo.repo_id}", app=child)
+        Mount(repo_mount_path(repo.repo_id), app=child)
         for repo, child in zip(repos, children)
     ]
     # Mounted apps do not get their lifespans run by the parent for free, and
-    # a2acode initializes its stores in one. See mounting.py.
+    # a2acode's lifespan is what closes each backend and push-notification
+    # client on shutdown. See mounting.py.
     return Starlette(routes=routes, lifespan=mount_lifespans(children))
 
 

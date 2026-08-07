@@ -149,3 +149,73 @@ def test_load_repos_reads_every_directory(tmp_path):
 def test_an_empty_repos_directory_is_an_error(tmp_path):
     with pytest.raises(RepoError, match="no repos"):
         load_repos(tmp_path)
+
+
+# --- `recorded:` provenance (M3 groundwork) -----------------------------------
+
+
+_RECORDED_PLAYS = """
+plays:
+  - match: { contains: "hello" }
+    events:
+      - text: "hi"
+recorded:
+  recorded_at: "2026-08-07T00:00:00Z"
+  source_prompt: "hello"
+  backend: claude
+"""
+
+
+def test_a_recorded_block_loads_and_its_plays_still_work(tmp_path):
+    home = _repo(tmp_path, "r", scenarios={"only.yaml": _RECORDED_PLAYS})
+
+    repo = load_repo(home)
+
+    assert repo.select("hello", 1).events == [{"text": "hi"}]
+
+
+def test_the_recorded_block_is_reachable_on_the_scenario(tmp_path):
+    home = _repo(tmp_path, "r", scenarios={"only.yaml": _RECORDED_PLAYS})
+
+    scenario = load_repo(home).scenarios[0]
+
+    assert scenario.recorded == {
+        "recorded_at": "2026-08-07T00:00:00Z",
+        "source_prompt": "hello",
+        "backend": "claude",
+    }
+
+
+def test_a_scenario_without_recorded_defaults_to_empty(tmp_path):
+    home = _repo(tmp_path, "r")
+
+    scenario = load_repo(home).scenarios[0]
+
+    assert scenario.recorded == {}
+
+
+def test_an_unknown_top_level_key_that_is_not_recorded_is_still_rejected(tmp_path):
+    """`recorded` is the one permitted companion to `plays` — a typo like
+    `play:` or `plays :` (which yaml parses as a sibling key) should still
+    fail loudly rather than silently doing nothing."""
+    home = _repo(
+        tmp_path,
+        "r",
+        scenarios={"only.yaml": 'plays:\n  - match: {}\n    events:\n      - text: "hi"\nbogus: 1\n'},
+    )
+
+    with pytest.raises(ScenarioError, match="bogus"):
+        load_repo(home)
+
+
+def test_a_non_mapping_recorded_is_rejected(tmp_path):
+    home = _repo(
+        tmp_path,
+        "r",
+        scenarios={
+            "only.yaml": 'plays:\n  - match: {}\n    events:\n      - text: "hi"\nrecorded: "not a mapping"\n'
+        },
+    )
+
+    with pytest.raises(ScenarioError, match="recorded"):
+        load_repo(home)

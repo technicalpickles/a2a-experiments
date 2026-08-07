@@ -1,9 +1,11 @@
 """Mounted sub-apps do not get their lifespans run for free.
 
 Starlette runs the lifespan of the app it is serving, not of anything mounted
-inside it. a2acode's `build_app()` initializes its task stores in a lifespan,
-so a mounted repo whose lifespan never ran would serve from uninitialized
-stores. This pins the propagation helper that fixes it.
+inside it. a2acode's task and push-notification stores are constructed
+eagerly, not in the lifespan, so a mounted repo whose lifespan never ran still
+answers requests fine — what it never gets is a clean shutdown: the
+lifespan's `finally` block is what closes the backend and the
+push-notification client. This pins the propagation helper that fixes that.
 """
 
 from __future__ import annotations

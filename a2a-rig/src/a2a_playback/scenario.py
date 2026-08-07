@@ -7,6 +7,12 @@ vocabulary. Who the agent running it is, and how it is paced, live in
 identical to a2acode's is what will let recorded scenarios (M3) and
 hand-written ones be the same format.
 
+The top level is a mapping rather than a bare list of plays for exactly this
+reason: it leaves room for a ``recorded`` block (when it was captured, the
+prompt that produced it, which backend) without another format change. A
+scenario file may carry ``plays`` and, optionally, ``recorded`` — nothing
+else.
+
 Validation is deliberately strict and up-front. A scenario with a typo'd event
 name should fail when the server starts, not halfway through a turn that a
 frontend is watching. The one rule that is *not* here is
@@ -17,7 +23,7 @@ list, so it lives in ``repo.py``.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +94,7 @@ class Scenario:
 
     plays: list[Play]
     path: Path | None = None
+    recorded: dict[str, Any] = field(default_factory=dict)
 
 
 def load_scenario(path: str | Path) -> Scenario:
@@ -108,17 +115,24 @@ def parse_scenario(raw: dict[str, Any], *, path: Path | None = None) -> Scenario
     if not isinstance(raw_plays, list) or not raw_plays:
         raise ScenarioError(f"{where}: scenario needs a non-empty `plays` list")
 
-    unknown = set(raw) - {"plays"}
+    unknown = set(raw) - {"plays", "recorded"}
     if unknown:
         raise ScenarioError(
             f"{where}: scenario has unexpected keys {sorted(unknown)}; a scenario "
-            f"holds `plays` and nothing else — identity and defaults belong in "
-            f"repo.yaml"
+            f"holds `plays` and, optionally, `recorded` provenance — everything "
+            f"else, like identity and defaults, belongs in repo.yaml"
         )
+
+    recorded = raw.get("recorded", {})
+    if recorded is None:
+        recorded = {}
+    if not isinstance(recorded, dict):
+        raise ScenarioError(f"{where}: scenario `recorded` should be a mapping")
 
     return Scenario(
         plays=[_parse_play(p, i, where) for i, p in enumerate(raw_plays, start=1)],
         path=path,
+        recorded=recorded,
     )
 
 
