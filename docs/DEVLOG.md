@@ -335,8 +335,18 @@ Then folded the standalone `a2a-rig` repo (`~/github.com/technicalpickles/a2a-ri
 3 commits) into this one under `a2a-rig/`, via `git subtree add --prefix=a2a-rig` against a
 temporary local remote pointing at that checkout — not a squash merge, so the three original
 commits (harness, cancel-root-cause note, playback backend) replay intact in this repo's
-history. The standalone checkout at `~/github.com/technicalpickles/a2a-rig` still exists
-untouched; it's now redundant but nothing depends on deleting it.
+history:
+
+```
+git remote add a2a-rig-local ~/github.com/technicalpickles/a2a-rig
+git fetch a2a-rig-local
+git subtree add --prefix=a2a-rig a2a-rig-local main -m "Incubate a2a-rig here as a subtree"
+git remote remove a2a-rig-local
+```
+
+`git subtree add` needed the sandbox disabled twice along the way — once because adding the
+temporary remote writes `.git/config`, once because the merge itself locks `.git/index` — same
+class of restriction as the earlier `git push origin main` over SSH, not a real failure.
 
 Reasoning: `docs/PLAN.md` and the original `CLAUDE.md` both described `a2a-rig` as a permanent
 separate repo, which was the plan when Phase 3 started. That's no longer the intent — showing
@@ -345,3 +355,14 @@ too early was pure overhead for a project this size. `git subtree` was chosen sp
 because the split is meant to be temporary: `git subtree split --prefix=a2a-rig` can hand the
 full, unsquashed history back to its own repo later without any rewriting. Updated `CLAUDE.md`
 and `docs/PLAN.md` to record this as the current state, not just a one-off note here.
+
+Also added a top-level `README.md` — the repo had none before going public, only `CLAUDE.md`
+(agent-facing, not a landing page). It points at `docs/` for the plan/design/log and `a2a-rig/`
+for the code, and states the incubating status up front.
+
+Finally, marked the standalone `~/github.com/technicalpickles/a2a-rig` checkout itself stale:
+added a note at the top of *its* `README.md` pointing back at the `a2a-rig/` subtree here as
+the active copy, and committed it there (that repo's `origin` remote has no URL configured, so
+the commit is local-only, not pushed anywhere). It stays on disk deliberately — it's the source
+`git subtree split` would replay from if `a2a-rig/` ever gets extracted back out — but is no
+longer where anyone should make changes.
