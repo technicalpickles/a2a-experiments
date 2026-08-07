@@ -31,7 +31,8 @@ from a2acode.backends.base import (
 )
 from a2acode.backends.session import BackendSession
 
-from .scenario import Scenario, ScenarioError, message_of
+from .repo import Repo
+from .scenario import ScenarioError, message_of
 
 
 class ScriptedError(RuntimeError):
@@ -62,15 +63,15 @@ def _speed() -> float:
 
 
 class PlaybackBackend:
-    """Emits scripted events from a scenario file."""
+    """Emits scripted events from a repo's scenarios."""
 
     name = "playback"
 
-    def __init__(self, scenario: Scenario) -> None:
-        self.scenario = scenario
+    def __init__(self, repo: Repo) -> None:
+        self.repo = repo
         # contextId -> how many turns that conversation has seen. The `turn: N`
         # match rule counts within a context, so a fresh conversation replays
-        # the scenario from the top.
+        # the repo's scripts from the top.
         self._turns: dict[str, int] = {}
 
     def _next_turn(self, context_id: str | None) -> int:
@@ -80,7 +81,7 @@ class PlaybackBackend:
 
     async def drive(self, session: BackendSession, request: RunRequest) -> None:
         turn = self._next_turn(request.context_id)
-        play = self.scenario.select(request.prompt, turn)
+        play = self.repo.select(request.prompt, turn)
         await self._run_events(session, play.events, request)
 
     async def _run_events(
@@ -139,7 +140,7 @@ class PlaybackBackend:
         speed = _speed()
         if not speed:
             return
-        delay_ms = self.scenario.default_delay_ms
+        delay_ms = self.repo.default_delay_ms
         if isinstance(body, dict) and body.get("delay_ms") is not None:
             delay_ms = float(body["delay_ms"])
         if delay_ms > 0:

@@ -9,31 +9,31 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 import uvicorn
 from a2acode.server import build_app
 
 from .backend import PlaybackBackend
-from .scenario import ScenarioError, load
+from .repo import RepoError, load_repo
+from .scenario import ScenarioError
 
 
-def build(scenario_path: str | Path, *, url: str):
-    scenario = load(scenario_path)
-    backend = PlaybackBackend(scenario)
+def build_repo_app(repo, *, url: str):
+    """One repo's a2acode app, with the playback backend injected."""
+    backend = PlaybackBackend(repo)
     return build_app(
         backend,
         url=url,
-        card_name=scenario.card_name,
-        card_description=scenario.card_description,
+        card_name=repo.card_name,
+        card_description=repo.card_description,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="rig-serve", description="Serve a scripted A2A agent from a scenario file."
+        prog="rig-serve", description="Serve scripted A2A agents from a repo directory."
     )
-    parser.add_argument("--scenario", required=True, help="Path to a scenario YAML.")
+    parser.add_argument("--repo", help="Path to one repo directory.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9200)
     parser.add_argument(
@@ -41,16 +41,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if not args.repo:
+        parser.error("--repo is required")
+
     url = f"http://{args.host}:{args.port}/"
     try:
-        app = build(args.scenario, url=url)
-    except ScenarioError as exc:
-        # Scenario problems are user errors, not crashes: say what is wrong and
+        app = build_repo_app(load_repo(args.repo), url=url)
+    except (RepoError, ScenarioError) as exc:
+        # Config problems are user errors, not crashes: say what is wrong and
         # exit, rather than burying it in a traceback.
         print(f"rig-serve: {exc}", file=sys.stderr)
         return 2
 
-    print(f"rig-serve: scenario={args.scenario} card={url}", flush=True)
+    print(f"rig-serve: repo={args.repo} card={url}", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     return 0
 

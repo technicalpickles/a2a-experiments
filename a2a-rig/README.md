@@ -26,7 +26,7 @@ Expect 50 passed, 2 xfailed, in under two seconds either way.
 To serve a fake repo for a frontend to develop against:
 
 ```bash
-uv run rig-serve --scenario scenarios/billing-api.yaml --port 9200
+uv run rig-serve --repo repos/billing-api --port 9200
 ```
 
 That is a real A2A agent — point `a2a-cli`, a browser, or your own client at it.
@@ -119,7 +119,8 @@ the instant you ask reads as a UI bug rather than a script.
 - `src/a2a_rig/events.py` — collapses a protobuf event stream into an assertable `Capture`
   (`states`, `artifacts`, `artifact_text()`, `permission`, `completion_metadata`).
 - `tests/conftest.py` — server pool, A2A client, card, and the per-backend stimuli above.
-- `scenarios/` — scenario library. `tests/scenarios/` holds fixtures used by the tests.
+- `repos/` — repo library, one directory per fake agent (`repo.yaml` plus `scenarios/*.yaml`).
+  `tests/repos/` holds repos used as test instruments rather than demos.
 
 Servers are pooled per `(backend, args)` for the session rather than booted per test; that is
 the difference between a 20-second suite and a 1-second one. Use the `fresh_server_url` fixture

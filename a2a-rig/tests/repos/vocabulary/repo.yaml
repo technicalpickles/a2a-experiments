@@ -1,0 +1,8 @@
+# Probes for the M1 event vocabulary. A test instrument rather than a demo:
+# one play per behavior a frontend needs to render but cannot provoke on
+# demand from live inference.
+card:
+  name: vocabulary
+  description: "M1 vocabulary probes (playback)"
+defaults:
+  delay_ms: 0

@@ -1,0 +1,5 @@
+# Deliberately has no catch-all play, so anything unscripted fails the turn.
+# Used to prove a mis-scripted test never gets a plausible wrong answer.
+card:
+  name: strict
+  description: "No catch-all (playback)"

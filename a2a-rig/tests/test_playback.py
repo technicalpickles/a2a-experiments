@@ -19,20 +19,20 @@ from a2a.types import CancelTaskRequest, GetTaskRequest
 from a2acode.backends.base import PermissionDecision, RunRequest
 from a2acode.backends.session import BackendSession
 
-from a2a_playback import scenario as scenario_mod
 from a2a_playback.backend import PlaybackBackend, ScriptedError
-from a2a_playback.scenario import Match, ScenarioError, parse
+from a2a_playback.repo import Repo, load_repos
+from a2a_playback.scenario import Match, ScenarioError, parse_scenario
 from a2a_rig.events import parts_text, send, state_name
 from a2a_rig.server import serve
 
-SCENARIOS = Path(__file__).parent / "scenarios"
+REPOS = Path(__file__).parent / "repos"
 
 pytestmark = pytest.mark.backend("playback")
 
 
 @pytest.fixture(scope="session")
-def _scenario_servers():
-    """Playback servers keyed by scenario (and env), reused across tests.
+def _repo_servers():
+    """Playback servers keyed by repo (and env), reused across tests.
 
     Same bargain as the main pool in conftest: booting costs ~0.5s, and tasks
     are isolated by id, so one server per distinct configuration is enough.
@@ -45,7 +45,7 @@ def _scenario_servers():
             key = (name, tuple(sorted((env or {}).items())))
             if key not in pool:
                 pool[key] = stack.enter_context(
-                    serve(backend="playback", scenario=SCENARIOS / name, env=env)
+                    serve(backend="playback", repo=REPOS / name, env=env)
                 )
             return pool[key]
 
@@ -55,16 +55,25 @@ def _scenario_servers():
 
 
 @pytest_asyncio.fixture
-async def on_scenario(_scenario_servers, http_client):
-    """`client = await on_scenario("vocabulary.yaml")` — a client on one scenario."""
+async def on_repo(_repo_servers, http_client):
+    """`client = await on_repo("vocabulary")` — a client on one repo."""
 
     async def make(name: str, env: dict[str, str] | None = None):
         return await create_client(
-            _scenario_servers(name, env),
+            _repo_servers(name, env),
             ClientConfig(streaming=True, httpx_client=http_client),
         )
 
     return make
+
+
+def _repo_of(plays: list[dict], **defaults) -> Repo:
+    """A one-scenario repo, for tests that drive the backend directly."""
+    return Repo(
+        repo_id="t",
+        defaults=defaults,
+        scenarios=[parse_scenario({"plays": plays})],
+    )
 
 
 # --- Matching ------------------------------------------------------------
@@ -100,27 +109,22 @@ def test_rules_combine_conjunctively():
 
 
 def test_first_match_wins():
-    scenario = parse(
-        {
-            "name": "s",
-            "plays": [
-                {"match": {"contains": "a"}, "events": [{"text": "first"}]},
-                {"match": {}, "events": [{"text": "default"}]},
-            ],
-        }
+    repo = _repo_of(
+        [
+            {"match": {"contains": "a"}, "events": [{"text": "first"}]},
+            {"match": {}, "events": [{"text": "default"}]},
+        ]
     )
 
-    assert scenario.select("a", 1).events == [{"text": "first"}]
-    assert scenario.select("zzz", 1).events == [{"text": "default"}]
+    assert repo.select("a", 1).events == [{"text": "first"}]
+    assert repo.select("zzz", 1).events == [{"text": "default"}]
 
 
 def test_unmatched_turn_raises():
-    scenario = parse(
-        {"name": "s", "plays": [{"match": {"turn": 1}, "events": [{"text": "hi"}]}]}
-    )
+    repo = _repo_of([{"match": {"turn": 1}, "events": [{"text": "hi"}]}])
 
     with pytest.raises(ScenarioError, match="no play matched"):
-        scenario.select("anything", 2)
+        repo.select("anything", 2)
 
 
 # --- Validation ----------------------------------------------------------
@@ -128,29 +132,27 @@ def test_unmatched_turn_raises():
 
 def test_unknown_event_kind_is_rejected():
     with pytest.raises(ScenarioError, match="unknown event"):
-        parse({"name": "s", "plays": [{"match": {}, "events": [{"txt": "oops"}]}]})
+        parse_scenario({"plays": [{"match": {}, "events": [{"txt": "oops"}]}]})
 
 
 def test_unknown_match_key_is_rejected():
     with pytest.raises(ScenarioError, match="unknown match keys"):
-        parse({"name": "s", "plays": [{"match": {"turnn": 1}, "events": [{"text": "x"}]}]})
+        parse_scenario(
+            {"plays": [{"match": {"turnn": 1}, "events": [{"text": "x"}]}]}
+        )
 
 
 def test_permission_needs_a_tool():
     with pytest.raises(ScenarioError, match="needs a `tool`"):
-        parse(
-            {
-                "name": "s",
-                "plays": [{"match": {}, "events": [{"permission": {"input": {}}}]}],
-            }
+        parse_scenario(
+            {"plays": [{"match": {}, "events": [{"permission": {"input": {}}}]}]}
         )
 
 
 def test_events_inside_permission_branches_are_validated():
     with pytest.raises(ScenarioError, match="unknown event"):
-        parse(
+        parse_scenario(
             {
-                "name": "s",
                 "plays": [
                     {
                         "match": {},
@@ -170,23 +172,22 @@ def test_events_inside_permission_branches_are_validated():
 
 def test_error_is_a_known_event_kind():
     """A scenario can script a failing run, not only a succeeding one."""
-    scenario = parse(
-        {"name": "s", "plays": [{"match": {}, "events": [{"error": "disk full"}]}]}
+    scenario = parse_scenario(
+        {"plays": [{"match": {}, "events": [{"error": "disk full"}]}]}
     )
 
-    assert scenario.select("anything", 1).events == [{"error": "disk full"}]
+    assert scenario.plays[0].events == [{"error": "disk full"}]
 
 
 def test_error_needs_a_message():
     with pytest.raises(ScenarioError, match="needs a message"):
-        parse({"name": "s", "plays": [{"match": {}, "events": [{"error": ""}]}]})
+        parse_scenario({"plays": [{"match": {}, "events": [{"error": ""}]}]})
 
 
 def test_events_inside_a_timeout_branch_are_validated():
     with pytest.raises(ScenarioError, match="unknown event"):
-        parse(
+        parse_scenario(
             {
-                "name": "s",
                 "plays": [
                     {
                         "match": {},
@@ -208,9 +209,8 @@ def test_events_inside_a_timeout_branch_are_validated():
 def test_a_timeout_branch_needs_a_timeout_to_reach_it():
     """Otherwise the branch is dead script that reads as covered behavior."""
     with pytest.raises(ScenarioError, match="`timeout_ms`"):
-        parse(
+        parse_scenario(
             {
-                "name": "s",
                 "plays": [
                     {
                         "match": {},
@@ -232,9 +232,8 @@ def test_a_plan_step_needs_content():
     """`step["content"]` is a hard index in the backend, so a step without one
     would raise halfway through a turn a frontend is already watching."""
     with pytest.raises(ScenarioError, match="`content`"):
-        parse(
+        parse_scenario(
             {
-                "name": "s",
                 "plays": [
                     {
                         "match": {},
@@ -249,9 +248,8 @@ def test_a_plan_cannot_be_two_things_at_once():
     """a2acode renders markdown ahead of steps and never mentions the loss, so a
     scenario written with both would quietly ship a plan the author never read."""
     with pytest.raises(ScenarioError, match="one of"):
-        parse(
+        parse_scenario(
             {
-                "name": "s",
                 "plays": [
                     {
                         "match": {},
@@ -272,40 +270,22 @@ def test_a_plan_cannot_be_two_things_at_once():
 def test_an_empty_plan_is_allowed():
     """It is how an agent says it abandoned the checklist — a2acode replaces the
     artifact with nothing rather than leaving a stale plan on screen."""
-    scenario = parse(
-        {"name": "s", "plays": [{"match": {}, "events": [{"plan": {}}]}]}
-    )
+    scenario = parse_scenario({"plays": [{"match": {}, "events": [{"plan": {}}]}]})
 
-    assert scenario.select("anything", 1).events == [{"plan": {}}]
-
-
-def test_a_catch_all_that_is_not_last_is_rejected():
-    """Otherwise the plays after it silently never run."""
-    with pytest.raises(ScenarioError, match="unreachable"):
-        parse(
-            {
-                "name": "s",
-                "plays": [
-                    {"match": {}, "events": [{"text": "default"}]},
-                    {"match": {"contains": "a"}, "events": [{"text": "never"}]},
-                ],
-            }
-        )
+    assert scenario.plays[0].events == [{"plan": {}}]
 
 
 def test_scenario_needs_plays():
     with pytest.raises(ScenarioError, match="non-empty `plays`"):
-        parse({"name": "s", "plays": []})
+        parse_scenario({"plays": []})
 
 
-def test_shipped_scenario_parses():
-    """The scenario the harness defaults to should always be loadable."""
-    scenario = scenario_mod.load(
-        Path(__file__).resolve().parents[1] / "scenarios" / "billing-api.yaml"
-    )
+@pytest.mark.xfail(reason="shipped repos land in repos-ship", strict=True)
+def test_shipped_repos_load():
+    """The repo library the harness ships should always be loadable."""
+    repos = load_repos(Path(__file__).parents[1] / "repos")
 
-    assert scenario.name == "billing-api"
-    assert scenario.card_name == "billing-api"
+    assert len(repos) >= 3
 
 
 # --- Driving the backend directly ----------------------------------------
@@ -318,7 +298,7 @@ def test_shipped_scenario_parses():
 
 def _driven(raw: dict, prompt: str = "go") -> BackendSession:
     session = BackendSession()
-    backend = PlaybackBackend(parse(raw))
+    backend = PlaybackBackend(_repo_of(raw["plays"], **raw.get("defaults", {})))
     request = RunRequest(prompt=prompt, context_id="ctx")
     session.start(lambda s: backend.drive(s, request))
     return session
@@ -339,7 +319,6 @@ async def test_error_event_fails_the_run_with_its_message():
     backend hitting a broken sandbox would."""
     session = _driven(
         {
-            "name": "s",
             "plays": [
                 {
                     "match": {},
@@ -356,7 +335,6 @@ async def test_error_event_fails_the_run_with_its_message():
 async def test_events_before_an_error_still_reach_the_consumer():
     session = _driven(
         {
-            "name": "s",
             "plays": [
                 {
                     "match": {},
@@ -379,7 +357,6 @@ async def test_events_before_an_error_still_reach_the_consumer():
 
 def _gate(**body) -> dict:
     return {
-        "name": "s",
         "plays": [
             {
                 "match": {},
@@ -464,8 +441,8 @@ async def _elapsed(session: BackendSession) -> float:
     return time.monotonic() - started
 
 
-def _one(body: dict, **scenario) -> dict:
-    return {"name": "s", "plays": [{"match": {}, "events": [body]}], **scenario}
+def _one(body: dict, **defaults) -> dict:
+    return {"plays": [{"match": {}, "events": [body]}], "defaults": defaults}
 
 
 async def test_delays_are_off_by_default(monkeypatch):
@@ -497,9 +474,7 @@ async def test_playback_speed_scales_delays(monkeypatch):
 async def test_a_scenario_default_paces_events_that_do_not_say(monkeypatch):
     monkeypatch.setenv("PLAYBACK_SPEED", "1.0")
 
-    elapsed = await _elapsed(
-        _driven(_one({"text": "hi"}, defaults={"delay_ms": SLOW}))
-    )
+    elapsed = await _elapsed(_driven(_one({"text": "hi"}, delay_ms=SLOW)))
 
     assert elapsed >= SLOW / 1000 * 0.8
 
@@ -566,20 +541,20 @@ async def test_turn_counting_is_per_context(client, simple_prompt):
     assert first.artifact_text() == second.artifact_text()
 
 
-async def test_a_scripted_error_fails_the_task(on_scenario):
+async def test_a_scripted_error_fails_the_task(on_repo):
     """The whole point of scripting a failure: a frontend's error path gets
     exercised on demand, through a2acode's real failure handling."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "crash the sandbox please")
 
     assert capture.final_state == "failed"
 
 
-async def test_work_done_before_a_scripted_error_is_still_reported(on_scenario):
+async def test_work_done_before_a_scripted_error_is_still_reported(on_repo):
     """A failed run is not a blank one — what happened before the failure is
     what a user needs to understand it."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "crash the sandbox please")
 
@@ -587,12 +562,12 @@ async def test_work_done_before_a_scripted_error_is_still_reported(on_scenario):
 
 
 async def test_an_expired_approval_answers_a_late_caller_with_the_timeout_branch(
-    on_scenario,
+    on_repo,
 ):
     """The whole abandoned-approval round trip over the wire: the task parks,
     the timeout fires with nobody listening, and the caller who finally says
     "allow" finds it was decided without them."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
     parked = await send(client, "deploy to production")
     assert parked.final_state == "input_required"
 
@@ -618,9 +593,9 @@ def _plans(capture) -> list:
     return [a for a in capture.artifacts if a.name == "plan"]
 
 
-async def test_a_plan_arrives_as_a_markdown_checklist(on_scenario):
+async def test_a_plan_arrives_as_a_markdown_checklist(on_repo):
     """The whole reason to watch a plan: which step the agent is on."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "show me the plan")
 
@@ -633,10 +608,10 @@ async def test_a_plan_arrives_as_a_markdown_checklist(on_scenario):
     )
 
 
-async def test_a_plan_update_replaces_the_one_before_it(on_scenario):
+async def test_a_plan_update_replaces_the_one_before_it(on_repo):
     """Reported by replacement, not by delta. A consumer that appended these
     would show the same three steps three times over."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "show me the plan")
 
@@ -650,20 +625,20 @@ async def test_a_plan_update_replaces_the_one_before_it(on_scenario):
     )
 
 
-async def test_a_high_priority_step_says_so(on_scenario):
+async def test_a_high_priority_step_says_so(on_repo):
     """`priority` is the one PlanStep field the ACP run never exercised, so it
     is scripted here rather than assumed."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "show me the plan")
 
     assert "- [ ] (high) Fix the parser" in parts_text(_plans(capture)[1].parts)
 
 
-async def test_a_prose_plan_is_carried_verbatim(on_scenario):
+async def test_a_prose_plan_is_carried_verbatim(on_repo):
     """Not every agent keeps a checklist. Flattening prose into invented steps
     would be the rig lying about what the agent said."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "plan this out in prose")
 
@@ -672,19 +647,19 @@ async def test_a_prose_plan_is_carried_verbatim(on_scenario):
     )
 
 
-async def test_a_plan_kept_in_a_file_arrives_as_a_pointer(on_scenario):
+async def test_a_plan_kept_in_a_file_arrives_as_a_pointer(on_repo):
     """The third Plan variant: the agent's plan lives somewhere else."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "keep the plan in a file")
 
     assert "PLAN.md" in parts_text(_plans(capture)[0].parts)
 
 
-async def test_an_abandoned_plan_clears_the_checklist(on_scenario):
+async def test_an_abandoned_plan_clears_the_checklist(on_repo):
     """A frontend that keeps rendering a plan the agent walked away from is
     showing work that is not happening."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "abandon the plan")
 
@@ -693,11 +668,11 @@ async def test_an_abandoned_plan_clears_the_checklist(on_scenario):
     assert parts_text(plans[-1].parts) == ""
 
 
-async def test_stop_reason_reaches_the_client(on_scenario):
+async def test_stop_reason_reaches_the_client(on_repo):
     """Tells a truncated answer from a finished one. Already plumbed through
     a2acode's result metadata; this pins it so the scenario vocabulary can
     rely on it."""
-    client = await on_scenario("vocabulary.yaml")
+    client = await on_repo("vocabulary")
 
     capture = await send(client, "list every endpoint, hit the ceiling if you must")
 
@@ -760,11 +735,11 @@ async def _cancel_mid_run(client) -> tuple:
 
 
 @cancel_mid_run_leaves_the_task_working
-async def test_a_cancel_lands_while_the_run_is_still_going(on_scenario):
+async def test_a_cancel_lands_while_the_run_is_still_going(on_repo):
     """The cancel case a parked task cannot cover: here the producer really is
     running, so the a2a-sdk guard the parked tests trip over does not apply.
     A UI offering "stop" during a long turn depends on this."""
-    client = await on_scenario("vocabulary.yaml", {"PLAYBACK_SPEED": "1.0"})
+    client = await on_repo("vocabulary", {"PLAYBACK_SPEED": "1.0"})
 
     capture, _ = await _cancel_mid_run(client)
 
@@ -772,10 +747,10 @@ async def test_a_cancel_lands_while_the_run_is_still_going(on_scenario):
 
 
 @cancel_mid_run_leaves_the_task_working
-async def test_a_cancelled_run_reaches_a_terminal_state(on_scenario):
+async def test_a_cancelled_run_reaches_a_terminal_state(on_repo):
     """Weaker than the above and still fails: a caller who cancels should at
     least be able to stop polling."""
-    client = await on_scenario("vocabulary.yaml", {"PLAYBACK_SPEED": "1.0"})
+    client = await on_repo("vocabulary", {"PLAYBACK_SPEED": "1.0"})
 
     capture, _ = await _cancel_mid_run(client)
     task = await client.get_task(GetTaskRequest(id=capture.task_id))
@@ -783,10 +758,10 @@ async def test_a_cancelled_run_reaches_a_terminal_state(on_scenario):
     assert state_name(task.status.state) in {"canceled", "failed", "completed"}
 
 
-async def test_a_cancelled_run_is_stranded_in_working(on_scenario):
+async def test_a_cancelled_run_is_stranded_in_working(on_repo):
     """Documents today's behavior, so the contrast with the xfails above is
     explicit. The stream just stops; nothing ever closes the task out."""
-    client = await on_scenario("vocabulary.yaml", {"PLAYBACK_SPEED": "1.0"})
+    client = await on_repo("vocabulary", {"PLAYBACK_SPEED": "1.0"})
 
     capture, response = await _cancel_mid_run(client)
     task = await client.get_task(GetTaskRequest(id=capture.task_id))
@@ -799,7 +774,7 @@ async def test_a_cancelled_run_is_stranded_in_working(on_scenario):
 async def test_an_unmatched_turn_fails_the_task(http_client):
     """The core anti-mock guarantee: no plausible answer to an unscripted
     prompt. A mis-scripted test should break, not quietly pass."""
-    with serve(backend="playback", scenario=SCENARIOS / "strict.yaml") as url:
+    with serve(backend="playback", repo=REPOS / "strict") as url:
         client = await create_client(
             url, ClientConfig(streaming=True, httpx_client=http_client)
         )

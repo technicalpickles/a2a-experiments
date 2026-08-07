@@ -78,10 +78,10 @@ def _drain(proc: subprocess.Popen) -> str:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SCENARIO = REPO_ROOT / "scenarios" / "billing-api.yaml"
+DEFAULT_REPO = REPO_ROOT / "repos" / "billing-api"
 
 
-def _playback_command(port: int, scenario: str | Path | None) -> list[str]:
+def _playback_command(port: int, repo: str | Path | None) -> list[str]:
     """`playback` is ours, so it is served by rig-serve, not the a2acode CLI.
 
     Uses the running interpreter rather than a console script so the harness
@@ -91,8 +91,8 @@ def _playback_command(port: int, scenario: str | Path | None) -> list[str]:
         sys.executable,
         "-m",
         "a2a_playback.serve",
-        "--scenario",
-        str(scenario or DEFAULT_SCENARIO),
+        "--repo",
+        str(repo or DEFAULT_REPO),
         "--host",
         "127.0.0.1",
         "--port",
@@ -106,7 +106,7 @@ def serve(
     cwd: str | Path | None = None,
     extra_args: list[str] | None = None,
     port: int | None = None,
-    scenario: str | Path | None = None,
+    repo: str | Path | None = None,
     env: dict[str, str] | None = None,
 ):
     """Run a server for the duration of the block, yielding its base URL.
@@ -118,7 +118,7 @@ def serve(
     port = port or free_port()
     url = f"http://127.0.0.1:{port}/"
     if backend == "playback":
-        cmd = _playback_command(port, scenario)
+        cmd = _playback_command(port, repo)
     else:
         cmd = [
             *a2acode_command(),
