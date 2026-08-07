@@ -59,27 +59,37 @@ failures are attributable to our code, not the stack.
 `input-required` round trip, and multi-turn against a2acode. **This is the checkpoint that
 the A2A stack "works in general."** ✅ Met via `a2a-cli` (patched fork); inspector left for later.
 
-## Phase 2 — One real-inference sanity pass *(your machine; API key; ~$1 budget)*
+## Phase 2 — One real-inference sanity pass *(your machine; API key; ~$1 budget)* ✅ done 2026-08-07
 
 Goal: prove the same surface carries a *real* Claude Code run — so playback scenarios have a
 known-real reference — then stop spending.
 
-- [ ] Scratch repo: a tiny git repo (a 20-line Flask app or similar), committed clean.
-- [ ] Serve the SDK path: `ANTHROPIC_API_KEY=… uv run a2acode serve --backend claude
+- [x] Scratch repo: a tiny git repo (a 20-line Flask app or similar), committed clean.
+      `~/scratch/demo-app` at `6890fd7` — Flask app with `/items` and `/items/<id>`.
+- [x] Serve the SDK path: `ANTHROPIC_API_KEY=… uv run a2acode serve --backend claude
       --cwd ~/scratch/demo-app --max-budget-usd 1` (add `--permission-mode acceptEdits` only
       if you want fewer pauses; default routes tool approvals to you — more instructive).
-- [ ] From a2a-cli or `a2acode call`: `"add a /health endpoint returning ok"`.
+      **No API key needed** — the backend inherits the `claude` CLI's own auth, and
+      subscription credentials still report real `cost_usd`. Ran without `--max-budget-usd`.
+- [x] From a2a-cli or `a2acode call`: `"add a /health endpoint returning ok"`.
       Watch: plan artifact, tool-call status updates, permission prompts (approve via
       follow-up message), file-diff artifact, cost metadata on completion.
-- [ ] Verify on disk: `git -C ~/scratch/demo-app diff` matches the artifact.
-- [ ] Multi-turn: `"now add a test for it"` with the same `--context` → session resumes.
-- [ ] Save the terminal transcript / inspector capture — the shape reference for Phase 5
+      All present **except the plan artifact** — Claude never called `TodoWrite` on a task
+      this small, so no `plan` event was emitted. Driven via `a2a-cli chat` first, then a
+      JSON-dumping client for the wire shapes (`docs/captures/dump_stream.py`).
+- [x] Verify on disk: `git -C ~/scratch/demo-app diff` matches the artifact.
+- [x] Multi-turn: `"now add a test for it"` with the same `--context` → session resumes.
+      New task id under the same context, same `claude_session_id`.
+- [x] Save the terminal transcript / inspector capture — the shape reference for Phase 5
       scenarios (and later the `--record` flag replaces this manual capture).
+      → `docs/captures/phase2-claude-run.jsonl` (66 wire-level events).
 - [ ] Optional: repeat once via the default ACP path (`--backend acp`,
       needs `npx @zed-industries/claude-agent-acp`) to see the vendor-neutral route.
+      Skipped for now (optional).
 
 **Exit:** one end-to-end real run observed through the same clients, artifacts verified on
-disk, transcript saved. Real inference is now optional for everything below.
+disk, transcript saved. Real inference is now optional for everything below. ✅
+Total spend: **$0.54** across two turns.
 
 ## Phase 3 — Drive it the way your code will *(anywhere; no key; ~half a day)*
 

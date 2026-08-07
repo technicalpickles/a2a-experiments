@@ -28,6 +28,10 @@ Three documents, three different jobs — don't blend them:
   under dated headings. This is where findings, dead ends, and the reasoning behind
   non-obvious decisions belong — PLAN.md stays terse, DEVLOG.md carries the "why." Append a
   new dated section per work session rather than editing old ones.
+- **`docs/captures/`** holds recorded wire traffic, not prose. `phase2-claude-run.jsonl` is
+  the Phase 2 real-Claude run (one JSON event per line, protobuf-serialized via
+  `MessageToDict`), captured with `dump_stream.py` alongside it. This is the shape reference
+  scenario YAML gets written against in Phases 4–5, until `--record` replaces it in Phase 7.
 - **`docs/pass-{1..4}-*.md`** are dated research snapshots (A2A protocol/SDKs, ecosystem
   tooling, Claude Agent SDK, deterministic-backend approaches) that fed the designs. Treat them
   as historical inputs, not living docs — if something in a pass doc turns out stale, the fix
@@ -43,7 +47,7 @@ throughout the docs:
 
 - `~/github.com/kanywst/a2acode` — the producer being faked. Pinned at v0.6.2. Standard
   Python/`uv` project: `uv sync --dev`, `uv run pytest -q` (163 tests), `uv run a2acode serve
-  --backend echo|claude|acp`, `uv run a2acode call`/`card`.
+  --backend echo|claude|acp`, `uv run a2acode call`/`card`. See "Running a2acode" below.
 - `~/github.com/a2aproject/a2a-inspector` — reference debugging UI. Currently **broken**
   against a2acode (see DEVLOG 2026-08-06): its `a2a-sdk` pin (0.3.10) predates the
   `supportedInterfaces` card shape a2acode's `a2a-sdk` 1.1.2 emits, and its client code is
@@ -58,6 +62,34 @@ throughout the docs:
 Future phases add an out-of-tree `playback` backend package and a pytest harness
 (`a2a-sdk` + pytest-asyncio) that imports a2acode rather than forking it — per DESIGN-v3 §7,
 no fork of a2acode itself is needed since backends are constructor-injected.
+
+## Running a2acode
+
+`uv run` resolves against the project you're standing in, so `uv run a2acode …` from this repo
+fails with `Failed to spawn: a2acode`. Either `cd ~/github.com/kanywst/a2acode` first, or pass
+the project explicitly from anywhere:
+
+```bash
+uv run --project ~/github.com/kanywst/a2acode a2acode serve \
+  --backend claude --cwd ~/scratch/demo-app
+```
+
+Two directories are in play and they are easy to conflate: where you *launch* (must resolve
+a2acode's venv) versus a2acode's `--cwd` flag, which is the project the coding agent edits.
+
+**Auth:** the `claude` backend spawns the `claude` CLI via the Claude Agent SDK and inherits
+whatever that CLI is logged in with — `ANTHROPIC_API_KEY` is **not** required, and a2acode
+does no key validation of its own. a2acode's README notes Anthropic doesn't permit
+subscription credentials when serving *third parties*; a local single-user rig isn't that.
+Subscription auth still reports real cost: `Result.cost_usd` (from the SDK's
+`total_cost_usd`) came back as `0.30` and `0.24` on the two Phase 2 turns, alongside full
+`usage` token counts and `claude_session_id`.
+
+Omit `--permission-mode` to keep tool approvals routing back to the caller as `input-required`
+(the instructive path); `acceptEdits` skips those pauses.
+
+The Phase 2 scratch repo is `~/scratch/demo-app` — a small Flask app (`/items`,
+`/items/<id>`), committed clean at `6890fd7`.
 
 ## Target architecture (DESIGN-v3)
 

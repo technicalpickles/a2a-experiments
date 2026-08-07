@@ -95,3 +95,79 @@ a separate, more consequential step than fixing our own dev tooling.
 Phase 1's checkpoint — "an independent client has driven card discovery, streaming,
 `input-required` round trip, and multi-turn against a2acode" — is met via the patched
 `a2a-cli`. a2a-inspector remains broken and is deferred, not blocking.
+
+## 2026-08-07 — Phase 2: real Claude through the A2A surface
+
+### Setup, and the `uv run` gotcha
+
+Scratch repo at `~/scratch/demo-app`: a small Flask app (`/items`, `/items/<id>`), committed
+clean at `6890fd7`. First attempt to start the server failed with `Failed to spawn: a2acode` —
+`uv run` resolves against whatever project you're standing in, and we were in this repo, not
+a2acode's checkout. Either `cd` there first or pass `--project`. Written up in CLAUDE.md since
+it will happen again.
+
+### Auth: no API key needed
+
+The plan budgeted an `ANTHROPIC_API_KEY` and `--max-budget-usd 1`. Neither turned out to be
+required. The `claude` backend spawns the `claude` CLI through the Claude Agent SDK and
+inherits whatever that CLI is logged in with; a2acode does no key validation of its own.
+a2acode's README flags that Anthropic doesn't permit subscription credentials for *third-party
+serving* — a local single-user rig isn't that.
+
+Worth correcting an assumption made earlier in the session: we guessed `cost_usd` would come
+back empty under subscription auth. It doesn't. Both turns reported real figures ($0.30 and
+$0.24, $0.54 total) alongside full `usage` token counts and a `claude_session_id`.
+
+### How it was driven
+
+`a2a-cli chat` confirmed card discovery and a `ping`/`pong` round trip against the live claude
+backend. For the actual capture we wanted wire shapes rather than a human-readable summary, so
+`docs/captures/dump_stream.py` uses the same client path as `a2acode call` but serializes each
+protobuf event with `MessageToDict`. Output is one JSON object per line —
+`docs/captures/phase2-claude-run.jsonl`, 66 events across both turns.
+
+### What the run produced
+
+`"add a /health endpoint returning ok"` → 16 `working` status updates carrying tool activity as
+text (`$ ls -la`, `✓ Bash`, `Read …`), then a `file_change` artifact, then `input-required`.
+Approve → the edit lands. Second permission (a Flask test-client command) approved; third (build
+a venv and pip-install flask) denied, at which point the run completed gracefully and reported
+honestly that it hadn't been able to execute the code.
+
+Multi-turn `"now add a test for it"` on the same `--context` produced a **new task id under the
+same context id**, and went straight to writing `test_app.py` without re-reading `app.py` — the
+same `claude_session_id` on both completions confirms the Claude session genuinely resumed
+rather than starting cold.
+
+`git -C ~/scratch/demo-app diff` matches the artifact. Left uncommitted on purpose as a Phase 4
+comparison point.
+
+### Findings for scenario authoring
+
+- **Permission shape.** The `input-required` status message carries
+  `metadata.a2acode_permission` = `{tool, input, request_id}`, with `input` being the raw tool
+  arguments (for `Edit`: `file_path`, `old_string`, `new_string`, `replace_all`). The visible
+  text part is just `"Permission requested for Edit: Edit"` — the tool name is doubled and
+  the description is empty. Phase 5's `permission` events need to reproduce the metadata block,
+  not the text.
+- **Deny discards your text.** `executor.py:502-506` matches the answer against
+  `{allow, yes, y, approve, ok, accept, grant}` (or any string starting with `allow`);
+  everything else is a deny carrying a fixed `"Denied by A2A caller"`. There's no way to pass
+  guidance back to the agent through a denial, which is why wrapping up the second turn took
+  three denials in a row. Possible upstream nit.
+- **Diff artifacts are synthesized, not real diffs.** The `file_change` artifact for `app.py`
+  had hunk header `@@ -1 +1,6 @@` and paths like `a//Users/technicalpickles/…` (doubled
+  slash) — a2acode builds it from the `Edit` tool's `old_string`/`new_string`, so line numbers
+  are fabricated and the header is cosmetic. Fine for UI rendering, but don't build anything
+  that trusts those line numbers.
+- **No `plan` event.** a2acode derives plans from `TodoWrite` calls, and Claude didn't use
+  TodoWrite for a task this small. Exercising the `plan` path needs a deliberately bigger
+  prompt — worth doing before Phase 5 scripts plan events against nothing but the code path.
+
+### Outcome
+
+Phase 2's exit criterion is met: one end-to-end real run observed through independent clients,
+artifacts verified on disk, transcript saved. Real inference is optional from here.
+
+The `--backend acp` variant is still unrun (optional in the plan). Next up is Phase 3, which
+needs no key — and `dump_stream.py` is most of a first draft of its event-collection helper.
