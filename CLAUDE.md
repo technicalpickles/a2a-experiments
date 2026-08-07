@@ -117,13 +117,18 @@ The Phase 2 scratch repo is `~/scratch/demo-app` — a small Flask app (`/items`
 
 ## Target architecture (DESIGN-v3)
 
-The centerpiece is a `playback` backend for a2acode: it reads a **scenario** (YAML, in
-a2acode's own `BackendEvent` vocabulary — `text`, `tool_use`/`tool_result`, `plan`,
-`file_change`, `permission`, `result`, etc.) and emits scripted events through a2acode's real
-server, protocol mapping, and task-state machine. The frontend/agents being built therefore
-develop against the **real A2A surface** (real card, real JSON-RPC+SSE, real `input-required`
-machinery, real artifact chunking) with a scripted brain instead of live inference — so the
-stub can't drift from the real producer, because it *is* the real producer minus the model.
+The centerpiece is a `playback` backend for a2acode. A fake repo is a directory: `repo.yaml`
+declares identity and defaults, `scenarios/*.yaml` hold the plays — written in a2acode's own
+`BackendEvent` vocabulary (`text`, `tool_use`/`tool_result`, `plan`, `file_change`,
+`permission`, `result`, etc.) — and the directory name is the repo id, the only source of
+identity. `playback` emits a repo's scripted events through a2acode's real server, protocol
+mapping, and task-state machine. The frontend/agents being built therefore develop against the
+**real A2A surface** (real card, real JSON-RPC+SSE, real `input-required` machinery, real
+artifact chunking) with a scripted brain instead of live inference — so the stub can't drift
+from the real producer, because it *is* the real producer minus the model. Consumers discover
+repos through the index at `GET /` (`{"repos": [{"name", "description", "card_url"}]}`) rather
+than the filesystem, which is what keeps one-process-many-repos and one-process-per-repo
+interchangeable.
 
 Scenario matching is first-match-wins over `turn: N`, `contains`/`regex`, or a `{}` default; an
 unmatched turn fails loudly rather than answering plausibly. A later `RecordingBackend`

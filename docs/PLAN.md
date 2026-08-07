@@ -187,13 +187,27 @@ scripted plans that `--backend claude` cannot currently produce.
 
 ## Phase 6 — M2: multi-repo rig + your consumers *(anywhere)*
 
-- [ ] Scenario directory → N fake repos: per-port supervisor or the mounted-apps wrapper
-      (DESIGN-v2 §9 pattern 2), each with its own card name.
-- [ ] Pytest fixtures exposing "a directory of repos" to your agents' tests.
+- [x] Scenario directory → N fake repos: one process with each repo mounted at
+      `/repos/<name>/` behind a JSON index at `/`, each with its own card
+      (DESIGN-v2 §9 pattern 2). One process per repo is retained as `--repo` —
+      it is what proves the index is topology-independent rather than a shape
+      only the rig can serve.
+- [x] Pytest fixtures exposing "a directory of repos" to your agents' tests.
+      The `repos` fixture resolves clients through the index, so tests are
+      written against the same contract a real consumer uses.
 - [ ] **Start building the frontend and agents against this** — the rig is now their
       standing dev environment.
 
-**Exit:** agent tests run against 3+ fake repos in <5s total; frontend dev loop is offline.
+Done along the way: **`repo` and `scenario` were split.** One YAML had been
+carrying both an agent's identity and its script, a conflation inherited from
+DESIGN-v3 itself (§2 said a fake repo *is* a scenario file; §4 said a scenario
+is a list of plays). M3 would have broken it — recording produces several
+scripts per repo, and identity inside the script means every recording
+restates it. DESIGN-v3 corrected.
+
+**Exit:** ✅ for the rig. 3+ fake repos, driven through one process, well
+inside the 5s budget; the frontend dev loop is offline. The remaining bullet
+is the consumer, which is its own project.
 
 ## Phase 7 — M3: the scenario factory *(recording runs on your machine)*
 

@@ -24,19 +24,30 @@ infrastructure (see §10 for where those live).
 YOUR CODE (the deliverable)                 THE FAKE (dev/test double)
 ┌───────────────────────────┐    A2A 1.0    ┌─────────────────────────────────────────┐
 │ frontend                  │  JSON-RPC+SSE │ a2acode serve --backend playback         │
-│ orchestrating agents      │──────────────▶│   --scenario repos/billing-api.yaml      │
+│ orchestrating agents      │──────────────▶│   --repos repos/                         │
 │ pytest suites for both    │               │ (real card · real streams · fake brain)  │
 └───────────────────────────┘               └─────────────────────────────────────────┘
-                                                scenarios/          ◀── scenario factory:
-                                                  billing-api.yaml      record real runs
-                                                  frontend-app.yaml     (--record, §6)
-                                                  flaky-legacy.yaml
+                                                repos/               ◀── scenario factory:
+                                                  billing-api/           record real runs
+                                                    repo.yaml             (--record, §6)
+                                                    scenarios/
+                                                  frontend-app/
+                                                  flaky-legacy/
 ```
 
-A **fake repo is just a scenario file** — so a multi-repo frontend is cheap to develop: a
-directory of scenario files served per-port or via a mounted-apps wrapper (DESIGN-v2 §9),
-each with its own agent card name. No git checkouts, no workspaces, no claude installs
-anywhere.
+A **fake repo is a directory**: `repo.yaml` declares who the agent is, and
+`scenarios/*.yaml` hold the scripts it can play. A repo *has* scenarios; it is
+not one. The directory name is the repo id, so identity has one source. A
+multi-repo frontend is therefore cheap to develop: a directory of repo
+directories, served either from one process with each repo mounted at
+`/repos/<name>/` behind a JSON index, or one process per repo (DESIGN-v2 §9).
+No git checkouts, no workspaces, no claude installs anywhere.
+
+Consumers read the **index**, not the filesystem and not root-scoped
+well-known discovery: `GET /` returns `{"repos": [{"name", "description",
+"card_url"}]}` with absolute card URLs. That is the seam that keeps the two
+topologies interchangeable — a consumer built on the index cannot tell them
+apart.
 
 ## 3. The core component: a `playback` backend for a2acode
 
@@ -63,20 +74,27 @@ comes from a2acode's own code paths, not from an imitation of them.
 Speed: no subprocess, no filesystem, no network beyond localhost HTTP — turns complete in
 milliseconds unless a scenario asks for realistic pacing.
 
-## 4. Scenario format
+## 4. Repo and scenario format
+
+Identity and pacing live in `repo.yaml`; a scenario file holds `plays:` and
+nothing else. A repo's scenario files are read in filename order and their
+plays concatenated, then matched first-match-wins — which is what makes M3
+additive, since a recording is just a new file in `scenarios/`.
 
 YAML, written in a2acode's own event vocabulary so recordings (§6) and hand-written
 scenarios are the same format. A scenario is a list of **plays**; each incoming message
 selects a play by match rules; a play is a list of events.
 
 ```yaml
-# scenarios/billing-api.yaml — a fake repo that "does" a refactor with a permission gate
-name: billing-api
+# repos/billing-api/repo.yaml — identity and pacing; no plays
 card:
   description: "Fake billing-api repo (playback)"
 defaults:
   delay_ms: 0            # instant by default; PLAYBACK_SPEED env scales all delays
+```
 
+```yaml
+# repos/billing-api/scenarios/refactor.yaml — a repo that "does" a refactor with a permission gate
 plays:
   - match: { turn: 1 }                    # first message in any context
     events:

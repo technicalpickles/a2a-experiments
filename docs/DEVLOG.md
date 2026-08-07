@@ -564,3 +564,91 @@ everything new lives in `tests/test_playback.py`.
 views against the rig that the real producer cannot currently generate. That's not the rig
 drifting from reality — it's the rig holding the contract a2acode intends and upstream having
 broken its own half. Which is a decent argument for the whole approach.
+
+## 2026-08-07 — Phase 6 (M2): a directory of repos
+
+### The repo/scenario split
+
+Six tasks landed M2, and the first real decision wasn't in the plan: what a "fake repo" *is*.
+One YAML had been carrying both an agent's identity and its script — `name:`, `card:`,
+`defaults:` sitting next to `plays:` in the same file. That conflation wasn't introduced by
+M2; it was inherited from DESIGN-v3 itself. §2 said "a fake repo is just a scenario file,"
+while §4 defined a scenario as a list of plays. Both were true of the same document, which is
+how a conflation like this survives a design review — nothing in it is wrong on its own. The
+word "scenario" traces back further still, to the surveyed prior art in
+`docs/pass-4-deterministic-backend.md`, where it meant a scripted transcript; a2acode's own
+event vocabulary and DESIGN-v3's usage both inherited that word without separating "the
+transcript" from "the thing running it."
+
+M3 is what would have broken it, not tidiness. Recording (the next milestone) produces several
+scripts per repo over time. With identity living inside the script, every recording would
+restate the repo's name and description, and they would eventually disagree with each other.
+Under the split, a repo's identity lives once in `repo.yaml`, and a recording is just a new
+file dropped into `scenarios/` — no format change needed to accept it, and nothing to keep in
+sync. `repo.yaml` now holds identity and defaults; `scenarios/*.yaml` hold `plays:` and
+nothing else; the directory name is the repo id, so there is exactly one source of identity
+(there is no `name:` field anywhere).
+
+### The lifespan finding
+
+The plan's flagged central risk was retired first, before anything else got built on top of
+it: Starlette does not run a mounted sub-app's lifespan, only the lifespan of the app actually
+being served. a2acode initializes its task and push-notification stores inside a lifespan, so
+mounting N repos under one Starlette app the naive way means N repos silently answering
+requests against uninitialized stores. `src/a2a_playback/mounting.py` runs every child app's
+lifespan by hand via an `AsyncExitStack`, so one process serving many repos gets the same
+store initialization a single `--repo` process gets for free.
+
+A nice corroboration showed up sideways: the decision that the rig serves **no agent card at
+the root** (`/` is the index, not a card — the rig is a directory of agents, not an agent)
+broke the test harness's own server-readiness probe, which had been polling the root card path
+waiting for it to come up. That the probe broke is independent evidence the 404 is real and not
+just a documented intention — nobody had to assert it, the harness proved it by falling over.
+
+### The index as the topology seam
+
+`GET /` returns `{"repos": [{"name", "description", "card_url"}]}`, with `card_url` always
+absolute. That's deliberate: a consumer reading card URLs out of the index cannot tell N repos
+mounted under one process from N repos each on their own port — both look like a list of full
+URLs to fetch. That's the seam that keeps the two topologies interchangeable.
+
+The single-repo-per-process path (`--repo`) was kept rather than deleted once `--repos`
+existed, and for a specific reason: it's what proves the index abstraction is honest rather
+than a shape only the rig itself can serve. If `--repo` didn't exist, or produced a
+differently-shaped card, "consumers read the index, not the topology" would be an assertion
+about one code path instead of a property that held across two.
+
+### A plan ordering flaw, caught during implementation
+
+The plan sequenced repo-format and backend-wiring changes ahead of actually shipping the three
+repos under `repos/`. But the task that pointed the backend and server at repos also set
+`DEFAULT_REPO = repos/billing-api` in `src/a2a_rig/server.py`, and `conftest.py`'s server pool
+calls `serve()` with no explicit repo argument — so `DEFAULT_REPO` gets hit on every pytest run
+regardless of `--backend`, because `test_playback.py`'s module marker pins it to playback
+regardless of the CLI flag. That meant the suite could not go green without a real
+`repos/billing-api` existing several tasks before "ship three fake repos" was scheduled to
+create it. Not a plan mistake anyone caught by reading ahead — it surfaced as a failing test
+run during implementation, and got resolved by migrating billing-api early (byte-identical
+`plays:` content, verified by diff) rather than reordering the whole plan.
+
+### Verification
+
+```
+uv run pytest --backend playback   →  102 passed, 4 xfailed, 4.44s
+uv run pytest --backend echo       →  102 passed, 4 xfailed, 4.82s
+```
+
+(Baseline going into Phase 6 was 79 passed, 4 xfailed.) The backend-agnostic suite
+(`test_card.py`, `test_lifecycle.py`, `test_multiturn.py`, `test_permission.py`,
+`test_stream.py`) needed zero edits across all six tasks —
+`git diff --stat main..HEAD -- a2a-rig/tests/test_card.py a2a-rig/tests/test_lifecycle.py
+a2a-rig/tests/test_multiturn.py a2a-rig/tests/test_permission.py a2a-rig/tests/test_stream.py`
+comes back empty. That constraint has now held for three consecutive milestones (Phase 4, 5,
+and 6), which is the evidence that the repo/scenario split landed in the right layer: protocol
+behavior never had to change to accommodate how repos are organized on disk.
+
+### Outcome
+
+**Phase 6 (M2) is done.** 3+ fake repos, served through one process behind an index, well
+inside the 5s test budget. The remaining Phase 6 bullet — building a frontend/agents against
+the rig — is its own project from here, not more rig work.

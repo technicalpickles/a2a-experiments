@@ -23,13 +23,20 @@ uv run pytest --backend playback   # against a scripted fake repo
 
 Expect 50 passed, 2 xfailed, in under two seconds either way.
 
-To serve a fake repo for a frontend to develop against:
+### Running the rig
 
 ```bash
-uv run rig-serve --repo repos/billing-api --port 9200
+# every repo, one process, index at /
+uv run rig-serve --repos repos/ --port 9200
+
+# one repo at a host root, the way a real deployment would run it
+uv run rig-serve --repo repos/billing-api --port 9201
 ```
 
-That is a real A2A agent — point `a2a-cli`, a browser, or your own client at it.
+Both are real A2A agents — point `a2a-cli`, a browser, or your own client at them. Under
+`--repos`, each repo is mounted at `/repos/<name>/` and `GET /` returns an index
+(`{"repos": [{"name", "description", "card_url"}]}`) rather than an agent card — the rig is a
+directory of agents, not an agent itself.
 
 The harness shells out to a2acode via `uv run --project ~/github.com/kanywst/a2acode`. If your
 checkout lives elsewhere:
