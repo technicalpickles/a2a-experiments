@@ -120,20 +120,30 @@ skeleton your agents' own tests will grow from.
 **Exit:** `pytest` green in seconds against echo; harness is backend-parameterized. ✅
 31 passed, 2 xfailed, ~1.3s (servers pooled per backend; per-test launches cost 20s).
 
-## Phase 4 — Playback M0: first fake repo *(anywhere; ~1–2 days)*
+## Phase 4 — Playback M0: first fake repo *(anywhere; ~1–2 days)* ✅ done 2026-08-07
 
 Goal: DESIGN-v3's centerpiece, minimum vocabulary. Out-of-tree, importing a2acode.
 
-- [ ] `playback` Backend: loads scenario YAML; emits `text`, `tool_use`/`tool_result`,
+- [x] `playback` Backend: loads scenario YAML; emits `text`, `tool_use`/`tool_result`,
       `result`; match rules `turn`/`contains`/default; unmatched → loud failure.
-- [ ] Serve wrapper: `rig-serve --scenario scenarios/billing-api.yaml --port 9200` (thin
+      Lives in the a2a-rig repo as its own package (`src/a2a_playback/`), separate from the
+      harness so the M4 extraction is a file move. Shipped more than M0's minimum — the full
+      event set (`thought`, `plan`, `file_change`, `notice`) and `regex` matching came along
+      for free, since they are all one-line maps onto `BackendEvent`. Permission branching
+      (`on_allow`/`on_deny`) landed too; `timeout_ms` did not, so it stays M1.
+- [x] Serve wrapper: `rig-serve --scenario scenarios/billing-api.yaml --port 9200` (thin
       script passing the backend into a2acode's `build_app()`).
-- [ ] `billing-api.yaml` hand-written from the Phase 2 transcript's shape.
-- [ ] Point the Phase 3 harness at it (backend param flip) — all tests green, now in ms.
-- [ ] Poke it with a2a-cli/inspector exactly as in Phase 1.
+- [x] `billing-api.yaml` hand-written from the Phase 2 transcript's shape.
+- [x] Point the Phase 3 harness at it (backend param flip) — all tests green, now in ms.
+      **Zero test bodies changed**, which was the Phase 3 bet paying off; only fixtures gained
+      a playback branch, plus one new `reply_marker` fixture (only echo parrots its input).
+- [x] Poke it with a2a-cli/inspector exactly as in Phase 1. a2a-cli: card, plan artifact, tool
+      activity, diff artifact, permission pause; `a2acode call allow` resumed it to
+      `[completed] $0.0173 · 4.0 turns`. Inspector still deferred (Phase 1's SDK skew).
 
 **Exit:** an independent client and the pytest harness both drive a fake repo with zero
-inference and sub-second turns. **From here, frontend development can start for real.**
+inference and sub-second turns. **From here, frontend development can start for real.** ✅
+50 passed, 2 xfailed against both `echo` and `playback`, under 2s each.
 
 ## Phase 5 — M1: full scenario vocabulary *(anywhere)*
 

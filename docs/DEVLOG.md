@@ -259,3 +259,68 @@ there for anything that genuinely needs an untouched process.
 31 passed, 2 xfailed, ~1.3s against echo. Exit criterion met. Phase 4 (playback M0) is next
 and needs no key either — and the Phase 2 capture in `docs/captures/` is the shape reference
 the first scenario gets written against.
+
+## 2026-08-07 — Phase 4: playback M0
+
+The centerpiece. `playback` lives in the a2a-rig repo as its own package
+(`src/a2a_playback/`), deliberately separate from the harness: DESIGN-v3 §7's endgame is
+offering it upstream, so keeping it importing nothing but a2acode's public backend vocabulary
+makes that a file move rather than an untangling.
+
+### No fork needed, as advertised
+
+`build_app(backend, *, url, card_name, card_description, ...)` takes the backend by
+constructor injection, exactly as the design predicted. `rig-serve` is ~50 lines: load a
+scenario, construct `PlaybackBackend`, hand it to `build_app`, run uvicorn. Nothing about
+a2acode is patched or subclassed.
+
+The Phase 3 worry about dependency trees turned out to be a non-issue: a2acode declares
+`requires-python = ">=3.13"`. Its venv happening to be on 3.14 was incidental. Added as a
+pinned git dependency at `v0.6.2`.
+
+### More than M0 asked for
+
+M0's list was `text`, `tool_use`/`tool_result`, `result` and `turn`/`contains`/default
+matching. The full event set (`thought`, `plan`, `file_change`, `notice`) and `regex` matching
+came along anyway, because each is a one-line map onto a `BackendEvent` dataclass and writing
+the dispatch for three of nine would have been the odd choice. Permission branching
+(`on_allow`/`on_deny`) also landed, since a scenario without a permission gate would not have
+exercised the interesting path. `timeout_ms` and `PLAYBACK_SPEED`-driven pacing are wired but
+untested, so they stay M1 work.
+
+### The Phase 3 bet paid off
+
+`pytest --backend playback` runs the same 33 backend-agnostic tests as echo with **zero test
+bodies changed**. Only the fixtures gained a playback branch.
+
+One fixture had to be added rather than branched: tests asserted `simple_prompt in
+artifact_text()`, which is an echo-ism — echo parrots its input, a scripted agent answers with
+whatever the scenario says. Split into `simple_prompt` (the stimulus) and `reply_marker` (what
+the reply should contain). That is the kind of coupling worth catching now; it would have been
+much more annoying to discover with a dozen scenarios in the library.
+
+### Failing loudly
+
+The anti-mock guarantee is the point of the whole design, so it got direct tests: an unmatched
+message fails the turn rather than answering plausibly (`ScenarioError` from the backend
+propagates through the session runner to `updater.failed`, landing the task in `failed`).
+Scenario files are validated at load, so a typo'd event name fails when the server boots
+instead of mid-stream in front of a frontend. And a catch-all play that is not last is
+rejected outright, since every play after it would silently never run — an easy mistake to
+make and a miserable one to debug.
+
+### Verified the Phase 1 way
+
+`a2a-cli send "add a /health endpoint and run the tests"` against `rig-serve` produced the
+scenario's own card (`billing-api`, "Fake billing-api repo (playback)"), a plan artifact
+rendered as a checklist, tool activity as working-status text, a diff artifact, a response
+artifact, and an `input-required` permission pause. `a2acode call "allow"` resumed it to
+`[completed] $0.0173 · 4.0 turns` — scripted cost metadata rendering exactly like a real
+run's. Instant, no key, no inference.
+
+### Outcome
+
+50 passed, 2 xfailed against both backends, under 2s each. Frontend development can start
+against this now. Phase 5 (M1) is the remaining vocabulary depth: permission `timeout_ms`,
+`delay_ms`/`PLAYBACK_SPEED` under test, error and `stop_reason` variants, cancel honored
+mid-delay.
