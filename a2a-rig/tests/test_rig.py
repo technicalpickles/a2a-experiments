@@ -104,3 +104,42 @@ async def test_two_repos_serve_different_content(rig_url, http_client):
 
     assert "A scripted answer." in answered.artifact_text()
     assert unmatched.final_state == "failed"
+
+
+# --- The fixture agent tests actually use --------------------------------
+
+
+async def test_the_fixture_exposes_every_shipped_repo(repos):
+    assert set(repos.names) >= {"billing-api", "checkout-web", "infra-terraform"}
+
+
+async def test_the_fixture_hands_out_a_client_per_repo(repos):
+    """What an agent test does: pick a repo by name, talk to it."""
+    client = await repos.client("billing-api")
+
+    capture = await send(client, "explain the tax module")
+
+    assert "VAT" in capture.artifact_text()
+
+
+async def test_repos_answer_independently(repos):
+    """Two repos, two different answers, one process."""
+    checkout = await repos.client("checkout-web")
+    infra = await repos.client("infra-terraform")
+
+    upgraded = await send(checkout, "upgrade the router")
+    broken = await send(infra, "get started")
+
+    assert upgraded.final_state == "input_required"
+    assert broken.final_state == "failed"
+
+
+async def test_three_repos_are_driveable_inside_the_phase_budget(repos):
+    """Phase 6's exit criterion: 3+ fake repos, under 5s total. Booting once
+    for all N is what makes that hold as repos accumulate."""
+    import time
+
+    start = time.monotonic()
+    for name in ("billing-api", "checkout-web", "infra-terraform"):
+        await send(await repos.client(name), "explain this repo")
+    assert time.monotonic() - start < 5.0

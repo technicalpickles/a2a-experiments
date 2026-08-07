@@ -9,6 +9,7 @@ every test below green without touching a test body. Override per-run with
 from __future__ import annotations
 
 from contextlib import ExitStack
+from pathlib import Path
 
 import httpx
 import pytest
@@ -171,3 +172,54 @@ def card(server_url) -> dict:
     response = httpx.get(url, timeout=10)
     response.raise_for_status()
     return response.json()
+
+
+# --- The repos fixture: a directory of repos for agent tests -----------------
+
+
+REPOS_DIR = Path(__file__).resolve().parents[1] / "repos"
+
+
+class Rig:
+    """A running rig, and the repos it serves.
+
+    Hands out one A2A client per repo, resolved through the index rather than
+    by building URLs — so a test is written against the registry contract, the
+    same way a real consumer would be, and keeps working if the topology
+    changes underneath it.
+    """
+
+    def __init__(self, url: str, index: dict, http_client):
+        self.url = url
+        self.index = index
+        self._http = http_client
+
+    @property
+    def names(self) -> list[str]:
+        return [entry["name"] for entry in self.index["repos"]]
+
+    async def client(self, name: str):
+        for entry in self.index["repos"]:
+            if entry["name"] == name:
+                base = entry["card_url"].removesuffix(".well-known/agent-card.json")
+                return await create_client(
+                    base, ClientConfig(streaming=True, httpx_client=self._http)
+                )
+        raise LookupError(f"no repo named {name!r}; have {self.names}")
+
+
+@pytest.fixture(scope="session")
+def _rig_url():
+    """One rig process for the whole session.
+
+    Booting costs ~0.5s and tasks are isolated by id, so one process serving
+    every repo is what keeps a growing repo directory cheap to test against.
+    """
+    with serve(backend="playback", repos=REPOS_DIR) as url:
+        yield url
+
+
+@pytest_asyncio.fixture
+async def repos(_rig_url, http_client) -> Rig:
+    index = (await http_client.get(_rig_url)).json()
+    return Rig(_rig_url, index, http_client)
