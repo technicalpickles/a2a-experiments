@@ -37,14 +37,32 @@ async def test_get_task_retains_artifacts(client, simple_prompt):
 
 # Canceling a task parked on input-required does not take: the call returns
 # successfully, but the task stays input_required both in the response and on a
-# later tasks/get. a2acode's executor.cancel() does emit updater.cancel(), so
-# the event appears to go nowhere once the task's stream has closed. Upstream
-# only tests cancel at the BackendSession level (tests/test_smoke.py), never
-# end to end over the protocol. strict=True so these flip loudly if that
-# changes — a frontend offering a "cancel" button on an approval prompt needs
-# to know this currently does nothing.
+# later tasks/get. Traced through all three layers:
+#
+#   Protocol: fine. input-required is an interrupted, non-terminal state, and
+#   TaskNotCancelableError exists precisely to distinguish terminal ones. The
+#   spec expects this to work.
+#
+#   a2acode: parks by *returning* from execute() (executor.py, "Paused on a
+#   permission request; keep the stream for the follow-up"), keeping the
+#   BackendSession alive out of band. Deliberate — it is what lets one round
+#   trip span two execute() calls — but it means the producer looks finished.
+#
+#   a2a-sdk: ActiveTask.cancel (active_task.py) only acts `if not
+#   self._is_finished.is_set() and self._producer_task`, else logs "not
+#   cancelling" and returns the task untouched. It models cancelable as "has a
+#   running producer" rather than "is not terminal". Worse, V2's
+#   on_cancel_task dropped the guard V1 had —
+#   `if result.status.state != TASK_STATE_CANCELED: raise TaskNotCancelableError`
+#   — so the mismatch surfaces as a successful response instead of an error.
+#   (DefaultRequestHandler is aliased to V2; the V1 file is dead code.)
+#
+# So the silent success is an a2a-sdk V2 regression; a2acode's design choice is
+# what walks into it. strict=True so these flip loudly if either side fixes it.
+# Matters for any UI offering "cancel" on an approval prompt: today that lies.
 cancel_of_parked_task_is_broken = pytest.mark.xfail(
-    strict=True, reason="a2acode: cancel does not apply to an input-required task"
+    strict=True,
+    reason="a2a-sdk V2: cancel no-ops on a task whose producer already returned",
 )
 
 
