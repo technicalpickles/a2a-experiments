@@ -234,6 +234,40 @@ fix is the only way to get it back.
 **Fix shape:** carry `tool_call.raw_input` (and the tool id) into the `ToolUse` event the way
 `request_permission` already does at `acp.py:363`.
 
+### A binary `PermissionDecision` flattens ACP's multi-option gates
+
+**No task yet** · Design question more than a bug, evidenced by a real recording
+
+`PermissionDecision` is `allow: bool` (`backends/base.py:114-120`), and `acp.py:371` resolves
+it against ACP's option list with `select_option`, preferring one-shot over sticky. For an edit
+approval — allow once, reject once — that is a fair simplification. For Claude Code's
+`ExitPlanMode` it is not, because there the three options are distinct *modes*, not styling:
+
+| ACP option | `kind` | what it means |
+|---|---|---|
+| `acceptEdits` | `allow_always` | yes, and auto-accept the edits that follow |
+| `default` | `allow_once` | yes, and keep gating each edit |
+| `plan` | `reject_once` | no, keep planning |
+
+An A2A caller can reach only the middle and last rows. "Yes, and stop asking me" — the option a
+frontend most wants to offer on a plan approval — is unreachable, and nothing reports that it
+was dropped.
+
+The `reject_once` row is the sharper half: because it means "keep planning" rather than "stop",
+denying this gate ends the task **`completed`**, not `failed`. Evidence is the promoted
+recording `a2a-rig/repos/billing-api/scenarios/20-recorded-planmode.yaml`, where the denied
+turn ends with the agent asking what to change. Any consumer that maps deny → failure is wrong
+for this tool, and a2acode's own vocabulary gives it no way to tell the two denials apart.
+
+**Why we care specifically:** the rig exists to let a frontend develop against real protocol
+shapes. This is a shape the protocol *can* carry (ACP has the options) that a2acode discards
+before it reaches the wire, so no amount of recording will surface it.
+
+**Fix shape:** carry the offered options onto `PermissionRequest` and let `PermissionDecision`
+name an option id, falling back to the current allow/deny resolution when it doesn't. Pairs
+naturally with the dropped-tool-arguments finding above — both are `events_from_update` /
+`request_permission` losing detail that ACP already handed over.
+
 ### M4: offer `playback` and `--record` upstream
 
 **Not a bug — the planned contribution.** DESIGN-v3 §7-8. `a2a_playback` is written to drop

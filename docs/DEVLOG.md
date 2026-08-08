@@ -927,3 +927,94 @@ replay loop has been run end to end by a human-driven client against live infere
 Phase 7 bullet asks for **three or more** recorded scenarios, so it stays unchecked: one
 recording is a proven pipeline, not a backbone. What is settled is that the pipeline works and
 what it costs to run — the remaining recordings are repetition, not risk.
+
+## 2026-08-08 — two more recordings, and the two things they corrected
+
+Closed Phase 7's `>=3 recorded scenarios` bullet. The previous entry called the remaining
+recordings "repetition, not risk." That was wrong twice over, and both corrections are worth
+more than the checkbox.
+
+### The recordings
+
+`20-recorded-crud.yaml` — "add a DELETE route and a POST route that 400s on a missing name,
+plus pytest coverage." Three permission gates, all answered `allow`, five `file_change` events,
+and **three `plan` events**.
+
+`20-recorded-planmode.yaml` — "add pagination to /items with limit and offset, and document it
+in README.md", recorded with `permissions.defaultMode: "plan"` in the agent's `--cwd`. One gate,
+answered `deny`. It is the only recording in the library carrying an `on_deny` branch.
+
+Both replay clean against a live `rig-serve` (recorded branch reproduces, unrecorded branch
+raises), suite unchanged at **165 passed / 4 xfailed** on both backends. Sixth consecutive
+milestone needing zero suite edits.
+
+### Correction 1: plan events are a function of task size, not permission mode
+
+The open question was whether a prompt could be written that *reliably* provokes a `plan`. The
+guess going in was that Claude Code's plan mode would be the lever. It is not, and the reason
+is that "plan" names two unrelated things:
+
+- **a2acode's `plan` event comes from `TodoWrite`.** `acp-agent.js:1438-43` maps a `TodoWrite`
+  call to ACP's `sessionUpdate: "plan"`, and a2acode's `acp.py:147` maps that to `Plan`. The
+  phase5 capture's checkbox list with `[>]`/`[x]` markers is a todo list wearing the word plan.
+- **Plan mode produces an `ExitPlanMode` permission request** (`acp-agent.js:707`), which lands
+  as a `PermissionRequest`. It never produces a `Plan` at all.
+
+So the health recording had no plan because a one-step task never bothers with a todo list, not
+because of any mode setting. The three-part CRUD prompt produced three, and they show the plan
+being *revised* mid-turn — steps merging, statuses walking `pending → in_progress → completed`.
+That is the by-replacement semantics DESIGN-v3 §6 describes, now with a recording behind it
+rather than a hand-written play asserting it.
+
+The knob is task size. Ask for three things.
+
+### Correction 2: a denied gate does not always fail the task
+
+This is the one that would have bitten a consumer. `acp.py:371` runs every decision through
+`select_option`, which prefers one-shot over sticky. ExitPlanMode offers three options, so:
+
+- `allow` → `allow_once` → optionId `default` ("yes, and manually approve edits")
+- `deny` → `reject_once` → optionId `plan` ("**no, keep planning**")
+
+Denying this gate does not stop the agent. It ends the turn `completed`, with the agent asking
+"What would you like to change about the plan?" — the revision happens on the *next* turn.
+Every hand-written deny in this repo ends `failed`, and the Phase 7 note asserting that
+hand-written plays own the deny branch had quietly assumed that was the only shape. A frontend
+built against the hand-written plays alone would treat deny as terminal and be wrong.
+
+Worth noting what got flattened on the way: a2acode's `PermissionDecision` is `allow: bool`
+(`base.py:114-120`), so ACP's three options collapse to two before they ever reach A2A. The
+caller cannot express "yes, and auto-accept the rest." For an edit gate that is a fair
+simplification; for ExitPlanMode the option ids are distinct *modes*, not styling. Logged in
+UPSTREAM.md.
+
+### Two operator hazards the runs surfaced
+
+**The agent inherits the recording harness's environment.** The first CRUD attempt was driven
+from a sandboxed shell, and the ACP-spawned Claude Code inherited the sandbox: `EPERM` on every
+`Edit`, `EPERM` on `mkdir '~/.claude/session-env/...'`, and a turn that ended with the agent
+asking the operator to debug their own `~/.claude` permissions. Nothing was written to the
+fixture. The recorder captured all of it faithfully, which is the second time write-every-turn
+has paid for an unplanned failure. Re-run outside the sandbox, it worked first try.
+
+The milder form survives into the good run: the agent's `pytest` resolved to
+`a2a-rig/.venv/bin/python`, because `rig-record` is launched from `a2a-rig/` and the spawned
+agent inherits `VIRTUAL_ENV`. Harmless to the scenario, but it puts the harness's own checkout
+path into recorded tool output.
+
+**`scrub_cwd` only covers the agent's `--cwd`.** Both recordings leaked absolute paths from
+*outside* it, in different shapes: the harness virtualenv above, and — in plan mode — the plan
+file Claude Code writes to `~/.claude/plans/<random-slug>.md`, which appears in `planFilePath`,
+in a `file_change.path`, and inside a diff header. Neither is reachable by the existing
+scrubber's rule. Handled by a generalized `scrub_promote.py` that applies caller-supplied
+redactions to every string in the document and then **refuses to write if any `/Users/` path
+survived** — a check worth having permanently, since both leaks were found by looking rather
+than by any error.
+
+### Outcome
+
+Three recordings, covering three shapes the hand-written plays could not assert on their own: a
+gated edit run, a multi-gate run with an evolving plan, and a deny that completes. The
+"recordings own the happy paths, hand-written plays own deny" split from the last entry is no
+longer accurate — recordings own whichever branch the live run took, and a live run can be
+*steered* to the interesting one by choosing the mode before recording.

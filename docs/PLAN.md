@@ -216,8 +216,18 @@ is the consumer, which is its own project.
 - [x] `RecordingBackend` decorator + `--record out.yaml` on the serve wrapper. *(Shipped as
       `RecordingBackend` plus the standalone `rig-record` CLI rather than a flag on
       `rig-serve`; `serve(..., record_out=)` is the shared seam.)*
-- [ ] Re-run the Phase 2 prompts once through `--record`; scrub; check in ≥3 recorded
-      scenarios **composing with** the hand-written ones. *(**Partial, 2026-08-08:** one
+- [x] Re-run the Phase 2 prompts once through `--record`; scrub; check in ≥3 recorded
+      scenarios **composing with** the hand-written ones. *(**Closed 2026-08-08** with three:
+      `20-recorded-health.yaml`, `20-recorded-crud.yaml` (three gates, and the only recording
+      carrying `plan` events), and `20-recorded-planmode.yaml` (the only recording with an
+      `on_deny` branch). All three verified by replaying both branches against a live
+      `rig-serve`; suite unchanged at 165/4 on both backends. Two corrections the runs forced:
+      **plan events are a function of task size, not permission mode** — they come from the
+      agent calling `TodoWrite`, so a one-step task never emits one; and **a denied gate does
+      not always fail the task** — denying Claude Code's ExitPlanMode means "keep planning", so
+      that recording ends `completed`, which the note below about hand-written plays owning the
+      deny branch had assumed impossible. See DEVLOG 2026-08-08.)*
+      *(**Partial, 2026-08-08:** one
       recording is checked in — `billing-api/scenarios/20-recorded-health.yaml`, a real
       permission gate answered `allow`, verified by replaying both branches against a live
       `rig-serve`. The pipeline is proven end to end; this stays unchecked until there are

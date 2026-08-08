@@ -164,6 +164,30 @@ Precedence is user → project → local → enterprise, last writer wins. Don't
 keeps auth state in the config directory too, so the run dies with `Authentication required`
 even when credentials live in the system keychain.
 
+**Run `rig-record` from a normal shell, not a sandboxed one.** The ACP-spawned agent inherits
+the launching process's environment, sandbox included. Recorded from inside one, the agent gets
+`EPERM` on every edit *and* on creating its own `~/.claude/session-env/`, and spends the turn
+diagnosing that instead of doing the work — a recording of your sandbox, not of a coding run.
+The milder version of the same bleed survives even a clean run: launch from `a2a-rig/` and the
+agent's `pytest` resolves to `a2a-rig/.venv`, putting this checkout's path into recorded output.
+
+**Want a `plan` event? Ask for three things.** Plan events come from the agent calling
+`TodoWrite`, so a one-step prompt never emits one. This is about task size, not permission mode
+— `permissions.defaultMode: "plan"` gets you Claude Code's `ExitPlanMode` *permission gate*,
+which is a different event entirely. Both are worth recording; don't reach for the mode
+expecting the event.
+
+**Denying a gate does not always fail the task.** Denying `ExitPlanMode` selects ACP's
+`reject_once` option, which for that tool means "no, keep planning" — the turn ends
+`completed`, with the agent asking what to change. See `20-recorded-planmode.yaml`.
+
+**Scrub beyond `scrub_cwd` before promoting.** It only rewrites paths under the agent's
+`--cwd`; anything the agent touched outside it lands verbatim. Both known shapes bit real runs:
+the harness virtualenv above, and the plan file Claude Code writes to
+`~/.claude/plans/<random-slug>.md` (which shows up in `planFilePath`, in a `file_change.path`,
+and inside a diff header). Grep the staged file for your home directory before it moves into
+`scenarios/` — nothing errors on a leak.
+
 Things the flags encode:
 
 - **`--backend acp`, not `claude`.** `--backend claude` cannot emit a `plan` event at all
@@ -186,8 +210,11 @@ when it's unusable, and the alternative is losing a real run over a file already
 A recording carries **only the branch that was taken**. A live gate gets answered once, so a
 recorded `permission` has `on_allow` or `on_deny`, never both, and reaching the other branch on
 replay raises instead of inventing one. That's why recordings compose with hand-written plays
-rather than replacing them — the deny path, the timeout, and scripted failures stay
-hand-written.
+rather than replacing them.
+
+Which branch you get is a choice, though, not a coin flip: answer the live gate `deny` and you
+record the deny branch, as `20-recorded-planmode.yaml` did. What stays hand-written is what a
+live run can't be *asked* for on demand — the abandoned-approval timeout and scripted failures.
 
 ### The refresh loop
 
