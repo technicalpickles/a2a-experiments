@@ -71,9 +71,9 @@ async def test_an_unscripted_permission_branch_fails_loudly():
     ))
 
     events = await _events(session)
-    assert isinstance(events[-1], PermissionRequest)
+    assert type(events[-1]).__name__ == "PermissionRequest"
 
-    session.resolve(PermissionDecision(events[-1].request_id, allow=False))
+    session.resolve(PermissionDecision(request_id=events[-1].request_id, allow=False))
     with pytest.raises(ScenarioError, match="on_deny"):
         await _events(session)
 
@@ -86,13 +86,13 @@ async def test_a_recorded_allow_branch_still_replays():
     ))
 
     events = await _events(session)
-    session.resolve(PermissionDecision(events[-1].request_id, allow=True))
+    session.resolve(PermissionDecision(request_id=events[-1].request_id, allow=True))
     resumed = await _events(session)
 
-    assert isinstance(resumed[-1], Result)
+    assert type(resumed[-1]).__name__ == "Result"
 ```
 
-Verify `PermissionRequest`, `PermissionDecision`, and `Result` are already imported at the top of `test_playback.py` — the timeout tests resolve decisions, so most of these are. Add only what is missing.
+**Add no imports.** `PermissionDecision` is already imported; the file deliberately identifies event types by `type(x).__name__` rather than importing `PermissionRequest`/`Result`, and these tests follow that. `pytest` and `ScenarioError` are already imported too.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -190,7 +190,7 @@ uv run pytest --backend playback
 uv run pytest --backend echo
 ```
 
-Expected: new tests PASS; both suites **110 passed, 4 xfailed**. If any pre-existing test body needs editing to pass, **stop** — that violates a global constraint and means the change landed in the wrong layer.
+Expected: new tests PASS; both suites **111 passed, 4 xfailed** (baseline 108 plus the three tests added here: one in `test_repo.py`, two in `test_playback.py`). If any pre-existing test body needs editing to pass, **stop** — that violates a global constraint and means the change landed in the wrong layer.
 
 - [ ] **Step 6: Commit**
 
@@ -1310,9 +1310,11 @@ cd a2a-rig && uv run pytest --backend playback && uv run pytest --backend echo
 - [ ] **Step 5: Commit**
 
 ```bash
-git add a2a-rig/tests/test_record_round_trip.py a2a-rig/tests/conftest.py
+git add a2a-rig/tests/test_record_round_trip.py
 git commit -F scratch/commit-msg-round-trip.txt
 ```
+
+This task adds a test file and nothing else. If you found yourself changing `conftest.py` or any source file to make it pass, that is a finding worth reporting, not a fix to slip in — the round trip is supposed to work on the code as built.
 
 ---
 
@@ -1336,13 +1338,13 @@ Make promotion a `mv`. Every shipped repo's scenario file ends with a `match: {}
 Add to `a2a-rig/tests/test_repo.py`:
 
 ```python
-def test_a_shipped_repo_accepts_a_new_scenario_file_without_reordering():
+@pytest.mark.parametrize("repo_name", ["billing-api", "checkout-web", "infra-terraform"])
+def test_a_shipped_repo_accepts_a_new_scenario_file_without_reordering(repo_name):
     """Promotion must be a `mv`. A catch-all living in the same file as real
     plays means any file sorting after it shadows everything it contains."""
-    from a2a_playback.repo import load_repo
-    from a2a_rig.server import REPO_ROOT
+    from pathlib import Path
 
-    home = REPO_ROOT / "repos" / "billing-api"
+    home = Path(__file__).parents[1] / "repos" / repo_name
     scenarios = sorted(p.name for p in (home / "scenarios").glob("*.yaml"))
     assert scenarios[-1] == "99-default.yaml", (
         f"the catch-all must sort last; got {scenarios}"
@@ -1358,7 +1360,7 @@ def test_a_shipped_repo_accepts_a_new_scenario_file_without_reordering():
 cd a2a-rig && uv run pytest tests/test_repo.py::test_a_shipped_repo_accepts_a_new_scenario_file_without_reordering -v
 ```
 
-Expected: FAIL — `scenarios[-1]` is `refactor.yaml`.
+Expected: FAIL for all three repos — `scenarios[-1]` is the single hand-written file, not `99-default.yaml`. Locate the shipped repos with `Path(__file__).parents[1] / "repos"`, the same idiom `test_shipped_repos_load` already uses; do not import a path constant from `a2a_rig.server`.
 
 - [ ] **Step 3: Rename and split, one repo at a time**
 
@@ -1385,14 +1387,30 @@ plays:
 
 Copy the *existing* catch-all events verbatim out of each repo's file rather than retyping them — `conftest.py`'s `reply_marker` fixture expects billing-api's to contain `Ready when you are`, and the other two have their own text.
 
-- [ ] **Step 4: Add the same guard for the other two repos**
+- [ ] **Step 4: Prove promotion is now a `mv`**
 
-Extend the test into a parametrized one:
+Add the test that states the actual goal, rather than only its precondition:
 
 ```python
-@pytest.mark.parametrize("repo_name", ["billing-api", "checkout-web", "infra-terraform"])
-def test_a_shipped_repo_accepts_a_new_scenario_file_without_reordering(repo_name):
-    ...
+def test_a_new_scenario_file_drops_in_without_shadowing(tmp_path):
+    """The point of the prefixes: a recorded file lands between the
+    hand-written plays and the catch-all, and everything stays reachable."""
+    import shutil
+    from pathlib import Path
+
+    home = tmp_path / "billing-api"
+    shutil.copytree(Path(__file__).parents[1] / "repos" / "billing-api", home)
+    (home / "scenarios" / "20-recorded.yaml").write_text(
+        'plays:\n'
+        '  - match: { regex: "^a recorded prompt$" }\n'
+        '    events:\n'
+        '      - text: "from a recording"\n'
+        '      - result: { num_turns: 1 }\n'
+    )
+
+    repo = load_repo(home)  # must not raise: the catch-all is still last
+    play = repo.select("a recorded prompt", turn=1)
+    assert play.events[0] == {"text": "from a recording"}, "the catch-all shadowed it"
 ```
 
 - [ ] **Step 5: Run everything**

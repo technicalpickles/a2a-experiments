@@ -96,6 +96,7 @@ def load_repo(path: str | Path) -> Repo:
         path=path,
     )
     _reject_shadowed_plays(repo)
+    _reject_shadowed_recordings(repo)
     return repo
 
 
@@ -125,3 +126,44 @@ def _reject_shadowed_plays(repo: Repo) -> None:
                 f"last in repo {repo.repo_id!r} ({repo.path}); every play after "
                 f"it is unreachable"
             )
+
+
+def _reject_shadowed_recordings(repo: Repo) -> None:
+    """The self-check in the other direction from ``_reject_shadowed_plays``.
+
+    A hand-written play sorting *ahead* of a promoted recording can shadow it
+    exactly the way billing-api's `contains: "run the tests"` once shadowed a
+    `20-*.yaml` recording of that same prompt: silently, since the recording
+    still loads and still replays, just never for the prompt it exists to
+    answer. `recorded.prompts` exists so a re-record run has a source list to
+    work from; checking it here is a second, free use of the same list — a
+    promoted recording that is shadowed now fails loudly at boot instead of
+    quietly answering wrong on replay.
+
+    `prompts` is a source list, not an index into `plays` (scrubbing can drop
+    or reorder either independently), so this matches by selecting the play a
+    prompt actually resolves to and checking its identity, not its position.
+
+    Shadowing runs both ways and both are now guarded: this catches a
+    recording being shadowed by an earlier-sorting play; the *existing* test
+    suite catches the opposite — a recording shadowing a hand-written play —
+    because `tests/conftest.py`'s `permission_prompt`/`denied_marker`
+    fixtures depend on billing-api's hand-written gate scenario and would go
+    red if a recording ever ate that prompt first.
+    """
+    for scenario in repo.scenarios:
+        prompts = (scenario.recorded or {}).get("prompts") or []
+        for prompt in prompts:
+            play = repo.select(prompt, turn=1)
+            if not any(candidate is play for candidate in scenario.plays):
+                winner = next(
+                    s for s in repo.scenarios
+                    if any(candidate is play for candidate in s.plays)
+                )
+                raise RepoError(
+                    f"{scenario.path}: recorded prompt {prompt!r} no longer "
+                    f"selects a play from this scenario — {play.describe()} in "
+                    f"{winner.path} wins instead. Something earlier in "
+                    f"{repo.repo_id!r}'s concatenated play list now shadows "
+                    f"this recording"
+                )

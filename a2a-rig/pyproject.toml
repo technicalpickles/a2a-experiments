@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 rig-serve = "a2a_playback.serve:main"
+rig-record = "a2a_playback.record:main"
 
 [dependency-groups]
 dev = [

@@ -117,6 +117,19 @@ def _playback_command(
     ]
 
 
+def _record_command(port: int, repo: str | Path | None, out: str | Path) -> list[str]:
+    """rig-record, launched the same way rig-serve is: module, not console script,
+    so the harness works from a bare checkout without an install step."""
+    return [
+        sys.executable, "-m", "a2a_playback.record",
+        "--backend", "playback",
+        "--repo", str(repo or DEFAULT_REPO),
+        "--out", str(out),
+        "--host", "127.0.0.1",
+        "--port", str(port),
+    ]
+
+
 @contextmanager
 def serve(
     backend: str = "echo",
@@ -126,16 +139,21 @@ def serve(
     repo: str | Path | None = None,
     repos: str | Path | None = None,
     env: dict[str, str] | None = None,
+    record_out: str | Path | None = None,
 ):
     """Run a server for the duration of the block, yielding its base URL.
 
     `echo`, `claude`, and `acp` go through a2acode's own CLI; `playback` goes
     through rig-serve, which injects our backend into a2acode's `build_app()`.
-    Either way what comes up is a2acode's real server.
+    `record_out` launches `rig-record` instead, wrapping the `playback` backend
+    so a round-trip test can drive a real A2A client against it and get a
+    scenario file back out. Either way what comes up is a2acode's real server.
     """
     port = port or free_port()
     url = f"http://127.0.0.1:{port}/"
-    if backend == "playback":
+    if record_out is not None:
+        cmd = _record_command(port, repo, record_out)
+    elif backend == "playback":
         cmd = _playback_command(port, repo, repos)
     else:
         cmd = [

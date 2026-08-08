@@ -139,6 +139,24 @@ def test_a_malformed_scenario_names_its_file(tmp_path):
         load_repo(home)
 
 
+def test_a_permission_with_no_branches_is_rejected_at_load(tmp_path):
+    """A gate that can do nothing on any answer is a mistake, not a valid state."""
+    home = _repo(
+        tmp_path,
+        "gateless",
+        scenarios={
+            "only.yaml": """
+plays:
+  - match: {}
+    events:
+      - permission: { tool: Bash, input: { command: "ls" } }
+"""
+        },
+    )
+    with pytest.raises(ScenarioError, match="at least one branch"):
+        load_repo(home)
+
+
 def test_load_repos_reads_every_directory(tmp_path):
     _repo(tmp_path, "beta")
     _repo(tmp_path, "alpha")
@@ -219,3 +237,106 @@ def test_a_non_mapping_recorded_is_rejected(tmp_path):
 
     with pytest.raises(ScenarioError, match="recorded"):
         load_repo(home)
+
+
+# --- scenario file prefixes (M3 promotion-as-mv) --------------------------------
+
+
+@pytest.mark.parametrize("repo_name", ["billing-api", "checkout-web", "infra-terraform"])
+def test_a_shipped_repo_accepts_a_new_scenario_file_without_reordering(repo_name):
+    """Promotion must be a `mv`. A catch-all living in the same file as real
+    plays means any file sorting after it shadows everything it contains."""
+    from pathlib import Path
+
+    home = Path(__file__).parents[1] / "repos" / repo_name
+    scenarios = sorted(p.name for p in (home / "scenarios").glob("*.yaml"))
+    assert scenarios[-1] == "99-default.yaml", (
+        f"the catch-all must sort last; got {scenarios}"
+    )
+    for name in scenarios[:-1]:
+        assert not name.startswith("99-"), f"{name} would compete with the catch-all"
+    load_repo(home)
+
+
+@pytest.mark.parametrize("turn", [1, 2])
+def test_a_new_scenario_file_drops_in_without_shadowing(tmp_path, turn):
+    """The point of the prefixes: a recorded file lands ahead of the
+    hand-written plays and the catch-all, and everything stays reachable —
+    including on turn 1, the shape a real `--record` capture most commonly
+    takes. That only holds because billing-api's broad `turn: 1` greeting
+    play was moved out of 30-refactor.yaml into 90-greeting.yaml, which
+    sorts after a promoted 20-*.yaml file; before that move this test's
+    turn=1 case failed for an unrelated reason (the greeting, not the
+    catch-all, shadowed it)."""
+    import shutil
+    from pathlib import Path
+
+    home = tmp_path / "billing-api"
+    shutil.copytree(Path(__file__).parents[1] / "repos" / "billing-api", home)
+    (home / "scenarios" / "20-recorded.yaml").write_text(
+        'plays:\n'
+        '  - match: { regex: "^a recorded prompt$" }\n'
+        '    events:\n'
+        '      - text: "from a recording"\n'
+        '      - result: { num_turns: 1 }\n'
+    )
+
+    repo = load_repo(home)  # must not raise: the catch-all is still last
+    play = repo.select("a recorded prompt", turn=turn)
+    assert play.events[0] == {"text": "from a recording"}, "shadowed by an earlier-sorting play"
+
+
+# --- `recorded.prompts` self-check (a promoted recording shadowed at load) -----
+
+
+def test_a_shadowed_recorded_prompt_fails_to_load(tmp_path):
+    """The recording's own source prompt no longer selects a play from its
+    own scenario — an earlier-sorting hand-written play has eaten it, the
+    same way billing-api's `contains: "run the tests"` once could have eaten
+    a promoted recording of that exact prompt."""
+    home = _repo(
+        tmp_path,
+        "r",
+        scenarios={
+            "10-handwritten.yaml": (
+                'plays:\n'
+                '  - match: { contains: "run the tests" }\n'
+                '    events:\n'
+                '      - text: "handwritten"\n'
+            ),
+            "20-recorded.yaml": (
+                'plays:\n'
+                '  - match: { regex: "^please run the tests now$" }\n'
+                '    events:\n'
+                '      - text: "recorded"\n'
+                'recorded:\n'
+                '  prompts:\n'
+                '    - "please run the tests now"\n'
+            ),
+        },
+    )
+
+    with pytest.raises(RepoError, match="no longer selects"):
+        load_repo(home)
+
+
+def test_an_unshadowed_recorded_prompt_loads_clean(tmp_path):
+    home = _repo(
+        tmp_path,
+        "r",
+        scenarios={
+            "20-recorded.yaml": (
+                'plays:\n'
+                '  - match: { regex: "^please run the tests now$" }\n'
+                '    events:\n'
+                '      - text: "recorded"\n'
+                'recorded:\n'
+                '  prompts:\n'
+                '    - "please run the tests now"\n'
+            ),
+        },
+    )
+
+    repo = load_repo(home)  # must not raise
+
+    assert repo.select("please run the tests now", turn=1).events == [{"text": "recorded"}]

@@ -1,0 +1,16 @@
+plays:
+  # Sorts late, ahead of only the catch-all: this is a broad `turn: 1` match
+  # with no `contains`/`regex` constraint, so it answers *any* first message.
+  # A file sorting after this one would have every turn-1 play shadowed by
+  # it, so it lives just above 99-default.yaml, not up with the specific
+  # plays in 30-refactor.yaml — that leaves room for 20-*.yaml (a promoted
+  # recording) and 30-*.yaml (hand-written specifics) to both win on turn 1
+  # before this catches it.
+  #
+  # First message of any conversation that is not one of the above.
+  - match: { turn: 1 }
+    events:
+      - tool_use: { name: Read, input: { file_path: "README.md" }, id: t1 }
+      - tool_result: { id: t1, name: Read }
+      - text: "Looked over the billing-api repo. Ready when you are."
+      - result: { cost_usd: 0.0021, num_turns: 1, stop_reason: end_turn }

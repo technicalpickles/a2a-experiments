@@ -109,6 +109,20 @@ this from a mock: a mis-scripted test breaks loudly instead of receiving a plaus
 answer. Scenario files are also validated at startup, so a typo'd event name fails when the
 server boots rather than mid-stream.
 
+### Filename convention
+
+A repo's scenario files load in filename order and their plays concatenate first-match-wins, so
+the numeric prefix is the promotion ladder:
+
+- `20-*.yaml` — recorded plays (the backbone; `rig-record` output, scrubbed and promoted)
+- `30-*.yaml` — hand-written specifics, for pathological paths a live run cannot produce
+- `90-*.yaml` — broad fallbacks (e.g. a bare `turn: 1` greeting)
+- `99-default.yaml` — the catch-all, which must sort last
+
+Recordings sort first: they're real interactions, and an imagined play shadowing a real
+recording of the same prompt would be backwards. Add a new file at the prefix matching what it
+is, not at whatever number is free.
+
 Set `PLAYBACK_SPEED` to scale `delay_ms` pacing (unset or `0` means instant, the CI default;
 `1.0` is lifelike, `0.1` is a tenth of the scripted pace). `delay_ms` goes on any event, or
 on `defaults:` for the whole scenario, and applies to a `permission` too — a gate that arrives
