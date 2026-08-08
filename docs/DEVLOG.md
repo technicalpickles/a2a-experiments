@@ -1103,3 +1103,28 @@ want them anyway) fixed it. `ruff format` also reformatted the addition, so chec
 
 The `Claude-Session:` commit trailer got stripped from the upstream commit at Josh's call. It
 points at a private session URL, which is fine in this repo and not fine in someone else's.
+
+### Cleanup pass after the two filings
+
+Went looking for what the filings invalidated. Five things:
+
+- **`test_playback.py`'s comment repeated the wrong mechanism.** The stale-read claim wasn't
+  only in UPSTREAM.md, it was in a checked-in code comment at the xfail. Corrected in place,
+  with a note saying what it used to say, since that comment is the first thing anyone reads
+  when the xfail flips.
+- **Both rig xfail `reason=` strings now cite `a2a-python#1170`** instead of describing the bug
+  in isolation. When one of these flips in CI, whoever sees it gets a link to the conversation
+  rather than a sentence they have to go re-derive.
+- **UPSTREAM.md pointed at `scratch/` for three issue bodies.** `scratch` is gitignored (via
+  `~/.gitignore`), so a checked-in, pushed doc was citing paths that exist on exactly one
+  machine and vanish on cleanup. Replaced with the GitHub URLs, which are the durable copy
+  anyway. Rule added to CLAUDE.md.
+- **CLAUDE.md's UPSTREAM bullet said the notes exist so an issue "can be written later without
+  re-deriving it."** That is exactly backwards and this session is the evidence: re-deriving is
+  what caught the bad mechanism *and* found the framing that made both reports land. Rewritten
+  to say an entry is a lead, not a verified claim, plus what to record after filing.
+- **`a2a-python` is a new sibling checkout** and CLAUDE.md's "where the rest of the code lives"
+  didn't know about it. Added, with the two things that cost time: their CI enforces
+  `ruff format`, and the fork/branch/PR arrangement.
+
+Rig suite still 165 passed / 4 xfailed, so none of the comment edits moved behavior.

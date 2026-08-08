@@ -43,8 +43,8 @@ between "we think cancel is broken" and a failing test.
 
 > **FILED 2026-08-08 as ONE issue, not two:**
 > [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170), with repro PR
-> [#1171](https://github.com/a2aproject/a2a-python/pull/1171). Bodies kept at
-> `scratch/issue-cancel-pair.md` and `scratch/pr-cancel-repro.md`.
+> [#1171](https://github.com/a2aproject/a2a-python/pull/1171). Those links are the bodies of
+> record — read them for the shape the next filing should copy.
 >
 > **That answers the "one issue or two?" question that rode six handoffs: one.** The argument
 > for two was that the parked finding opens a design debate ("what should cancelable mean")
@@ -184,10 +184,10 @@ observation alongside the bug is more useful than the bug alone.
 
 ### The claude backend can no longer emit a `plan` event at all
 
-**FILED 2026-08-08:** [kanywst/a2acode#37](https://github.com/kanywst/a2acode/issues/37). Body
-kept at `scratch/issue-70dc7c04.md`. The offer to send a PR was cut before posting — the fix
-needs cross-call list state, so it's not a drive-by, and it can be offered later if the
-maintainer likes the shape.
+**FILED 2026-08-08:** [kanywst/a2acode#37](https://github.com/kanywst/a2acode/issues/37), which
+is the body of record. The offer to send a PR was cut before posting — the fix needs cross-call
+list state, so it's not a drive-by, and it can be offered later if the maintainer likes the
+shape.
 
 **Task:** `70dc7c04` (done) · **Evidence:** `docs/captures/phase5-session-tools.json`,
 `docs/captures/phase5-plan-probe.jsonl`

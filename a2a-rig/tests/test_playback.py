@@ -722,9 +722,15 @@ async def test_stop_reason_reaches_the_client(on_repo):
 #   nobody left to tell. So the executor never writes a terminal state.
 #
 #   The `updater.cancel()` inside a2acode's own `cancel()` does then enqueue a
-#   canceled status, but by then it does not reach the task store, and
-#   `ActiveTask.cancel` returns the task it read *before* cancelling — which
-#   still says `working`. That is what the caller gets back.
+#   canceled status, but by then it does not reach the task store. So the
+#   `working` the caller gets back is a *current* read of a store nothing ever
+#   wrote a terminal state into.
+#
+#   (An earlier version of this comment said `ActiveTask.cancel` returns a task
+#   it read before cancelling. That was wrong: it re-reads at
+#   `active_task.py:753`, after `await self._is_finished.wait()`. Same observed
+#   `working`, different cause. Corrected 2026-08-08 while writing the upstream
+#   issue, which is what verified it.)
 #
 # So the ordering is the bug: the only component that owns the task's terminal
 # state is killed before it can write one. Fixable in either place — the SDK
@@ -733,9 +739,12 @@ async def test_stop_reason_reaches_the_client(on_repo):
 #
 # Playback is what made this cheap to see: a 3s scripted delay, no API key, no
 # inference, reproducible every run. strict=True so it flips loudly if fixed.
+#
+# Filed upstream as https://github.com/a2aproject/a2a-python/issues/1170, with a
+# pure-SDK repro in a2a-python's own suite (PR #1171) that needs no rig at all.
 cancel_mid_run_leaves_the_task_working = pytest.mark.xfail(
     strict=True,
-    reason="a2a-sdk V2: the producer is cancelled before the executor can "
+    reason="a2a-python#1170: the producer is cancelled before the executor can "
     "write a terminal state, so the task is stranded in `working`",
 )
 

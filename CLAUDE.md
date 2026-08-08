@@ -40,8 +40,22 @@ Each document has one job — don't blend them:
 - **`docs/UPSTREAM.md`** tracks findings that belong in someone else's repo (a2a-sdk,
   a2acode, a2a-cli, a2a-inspector) — the trace, the repro, and the framing each report
   needs. Taskwarrior holds status and is the actionable backlog; this doc holds the "why"
-  so an issue can be written later without re-deriving it. Add an entry when a DEVLOG
+  so an issue can be written later without rediscovering it. Add an entry when a DEVLOG
   finding turns out to be upstream's problem rather than ours.
+
+  **An entry here is a lead, not a verified claim.** Re-derive every line from current
+  upstream source before filing, even when the note is confident and cites line numbers.
+  Both 2026-08-08 filings found errors this way: a2acode#37's notes were sound but the
+  version had moved, and a2a-python#1170's notes asserted a mechanism (a stale read in
+  `ActiveTask.cancel`) that does not exist. Re-deriving also found the *best* framing in
+  both cases, which the notes had missed entirely. Budget for it; it is the expensive part
+  of filing, and it is where the report gets good.
+
+  **After filing, record it here:** a `FILED` note with the URL at the top of the entry,
+  the task marked done, and any corrected claim struck through *in place* rather than
+  deleted (the wrong version is the useful part). Link the issue URL, not a `scratch/`
+  path — `scratch/` is gitignored, so those pointers are dead for everyone but the machine
+  that wrote them.
 - **`docs/captures/`** holds recorded wire traffic, not prose — one JSON event per line,
   protobuf-serialized via `MessageToDict`, captured with `dump_stream.py` alongside them.
   These are the shape reference scenario YAML gets written against in Phases 4–5, until
@@ -85,6 +99,13 @@ referenced throughout the docs:
 - `~/github.com/kanywst/a2acode` — the producer being faked. Pinned at v0.6.2. Standard
   Python/`uv` project: `uv sync --dev`, `uv run pytest -q` (163 tests), `uv run a2acode serve
   --backend echo|claude|acp`, `uv run a2acode call`/`card`. See "Running a2acode" below.
+- `~/github.com/a2aproject/a2a-python` — the `a2a-sdk` itself, cloned 2026-08-08 to write the
+  cancel repro upstream (`docs/UPSTREAM.md`). `uv sync --dev`, `uv run pytest tests/integration
+  -q` (427 passed / 2 xfailed / 1 xpassed). Branch `cancel-no-terminal-state` is PR
+  [#1171](https://github.com/a2aproject/a2a-python/pull/1171), pushed to the `fork` remote
+  (`technicalpickles/a2a-python`), not to upstream. **Their CI enforces `ruff format`**, so run
+  `uv run ruff format --check` before committing — and diff against the baseline, since the
+  existing files are already clean and any complaint is therefore yours.
 - `~/github.com/a2aproject/a2a-inspector` — reference debugging UI. Currently **broken**
   against a2acode (see DEVLOG 2026-08-06): its `a2a-sdk` pin (0.3.10) predates the
   `supportedInterfaces` card shape a2acode's `a2a-sdk` 1.1.2 emits, and its client code is

@@ -60,9 +60,17 @@ async def test_get_task_retains_artifacts(client, simple_prompt, reply_marker):
 # So the silent success is an a2a-sdk V2 regression; a2acode's design choice is
 # what walks into it. strict=True so these flip loudly if either side fixes it.
 # Matters for any UI offering "cancel" on an approval prompt: today that lies.
+#
+# Filed upstream as https://github.com/a2aproject/a2a-python/issues/1170, bundled
+# with the mid-run stranding in test_playback.py rather than filed separately.
+# What made one issue the right call: V1 guards *both* paths (the post-check at
+# default_request_handler.py:233, and awaiting the executor's cancel before
+# killing the producer at L213 vs L224), so both are one regression story rather
+# than one bug plus one argument about what "cancelable" ought to mean.
 cancel_of_parked_task_is_broken = pytest.mark.xfail(
     strict=True,
-    reason="a2a-sdk V2: cancel no-ops on a task whose producer already returned",
+    reason="a2a-python#1170: cancel no-ops on a task whose producer already "
+    "returned",
 )
 
 
