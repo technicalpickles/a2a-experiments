@@ -1,0 +1,12 @@
+plays:
+  # A run that dies partway, as the default: a consumer gets a failing repo
+  # without having to know a magic phrase.
+  - match: {}
+    events:
+      - tool_use: { name: Bash, input: { command: "terraform init" }, id: t1 }
+      - tool_result:
+          id: t1
+          name: Bash
+          failed: true
+          output: "Error: Failed to query available provider packages"
+      - error: "terraform init could not reach the provider registry"

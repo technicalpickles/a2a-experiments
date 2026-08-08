@@ -1,0 +1,9 @@
+plays:
+  # A read-only question, so a consumer has a turn with no gate in it.
+  - match: {}
+    events:
+      - thought: "The caller wants orientation, not changes."
+      - tool_use: { name: Read, input: { file_path: "src/App.tsx" }, id: t1 }
+      - tool_result: { id: t1, name: Read }
+      - text: "This is a Vite + React checkout flow; routing lives in src/routes."
+      - result: { cost_usd: 0.003, num_turns: 1, stop_reason: end_turn }
