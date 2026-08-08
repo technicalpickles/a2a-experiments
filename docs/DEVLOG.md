@@ -1051,3 +1051,55 @@ Two judgment calls worth recording:
   and what wasn't rather than implying a fresher run than actually happened.
 
 Body kept at `scratch/issue-70dc7c04.md` so the next one has a shape to copy.
+
+## 2026-08-08 — the cancel pair, filed with a repro in someone else's suite
+
+Filed [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170) covering both
+cancel findings, with [#1171](https://github.com/a2aproject/a2a-python/pull/1171) adding two
+`xfail(strict=True)` scenarios to a2a-python's own `tests/integration/test_scenarios.py`.
+
+The repro living upstream was Josh's call, and it changed the report's whole footing. Our
+repros are strict xfails in the rig, which a maintainer can't run without checking out the rig,
+installing a2acode, and trusting a playback backend they've never seen. Rewritten against a
+stub `AgentExecutor` in their suite, the same bugs reproduce in 0.22s with no a2acode, no rig,
+no API key. It also removes the "sounds like a2acode's bug" deflection before anyone can reach
+for it. Their suite already uses `xfail(strict=True, reason=<issue url>)` (see #869), so this
+is their idiom rather than ours imposed.
+
+**One issue, not two.** That question rode six handoffs. The case for two was that the parked
+finding opens a design debate while the stranding one doesn't. It dissolved once V1 turned out
+to guard *both* paths: both became plain regressions under one headline. The parked test then
+asserts only "the state must not come back unchanged", so cancelling *or* raising
+`TaskNotCancelableError` both pass and the design question never has to be litigated.
+
+**Three things the notes had wrong or missing.** Writing the issue from source rather than from
+`UPSTREAM.md` is what caught them:
+
+- **The stale-read mechanism was wrong.** The notes said `ActiveTask.cancel` returns the task it
+  read before cancelling. It doesn't: it re-reads at `active_task.py:753` after
+  `await self._is_finished.wait()`. The return is fresh, and it says `working` because the store
+  was never written. Right observed behavior, wrong cause, and it would have been a public
+  correction if it had shipped.
+- **A parametrized V1-vs-V2 test does not work.** The tempting move was one test on their
+  existing `use_legacy` fixture, passing on legacy and failing on v2, so the regression *is* the
+  test. With an empty `cancel()` legacy doesn't pass, it hangs: `on_cancel_task` waits in
+  `consume_all` for an event that never arrives. Both handlers are broken, differently. Shipped
+  V2-only.
+- **Their own test papers over it, with a maintainer's TODO attached.**
+  `test_scenario_cancel_working_task_empty_cancel` passes only because its executor
+  hand-enqueues the `CANCELED` event, under a literal
+  `# TODO: this should be done automatically by the framework ?`. Same shape as the `TodoWrite`
+  finding one entry up: a test that supplies the thing it is testing. Two for two on that
+  pattern now, which is starting to look like the most reliable smell in this whole exercise.
+
+Also confirmed both bugs alive on `main` (`cff6727`), not just the v1.1.2 pin: `active_task.py`
+and `default_request_handler.py` are byte-identical to the tag.
+
+Mechanics worth remembering: the first attempt put the tests in a new file importing
+`tests.integration.test_scenarios`, which collided with pytest's own collection of that module
+and produced 111 errors across the suite. Appending to `test_scenarios.py` (where a PR would
+want them anyway) fixed it. `ruff format` also reformatted the addition, so check
+`ruff format --check` against the baseline before assuming a diff is yours.
+
+The `Claude-Session:` commit trailer got stripped from the upstream commit at Josh's call. It
+points at a private session URL, which is fine in this repo and not fine in someone else's.

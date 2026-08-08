@@ -1,8 +1,13 @@
 # Upstream issues to file
 
 Findings from this project that belong in someone else's repo, and what to say when filing
-them. One filed so far (`70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37));
-the rest are still drafts.
+them. Two filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
+and `79297b49`+`167506a4` → [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170)
+with repro PR [#1171](https://github.com/a2aproject/a2a-python/pull/1171). The rest are drafts.
+
+**Writing the issue is what verifies the note.** Both filings turned up claims here that were
+wrong or incomplete, and one of them (the stale-read mechanism, below) would have been a public
+correction if it had shipped. Re-derive from source before filing, always.
 
 **This doc is the "why", taskwarrior is the "when".** Each entry carries the UUID of its
 taskwarrior task (project `a2a-experiments`, tag `a2a`) — that's the actionable backlog and
@@ -36,10 +41,22 @@ between "we think cancel is broken" and a failing test.
 
 ## a2a-sdk (`a2aproject/a2a-python`)
 
+> **FILED 2026-08-08 as ONE issue, not two:**
+> [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170), with repro PR
+> [#1171](https://github.com/a2aproject/a2a-python/pull/1171). Bodies kept at
+> `scratch/issue-cancel-pair.md` and `scratch/pr-cancel-repro.md`.
+>
+> **That answers the "one issue or two?" question that rode six handoffs: one.** The argument
+> for two was that the parked finding opens a design debate ("what should cancelable mean")
+> while the stranding one doesn't, and bundling them buries the clean one. What dissolved that:
+> V1 guarded *both* paths, so both are plain regressions under one headline, and the parked
+> test asserts only "the state must not come back unchanged" — which sidesteps the design
+> question entirely, since cancelling *or* raising both pass.
+
 ### Cancel of a task whose producer already returned succeeds silently
 
-**Task:** `79297b49` · **Repro:** `a2a-rig/tests/test_lifecycle.py::test_cancel_a_parked_task`
-(strict xfail)
+**Task:** `79297b49` (done) · **Repro:** `a2a-rig/tests/test_lifecycle.py::test_cancel_a_parked_task`
+(strict xfail), and upstream as `test_scenario_19_cancel_of_parked_task_does_not_silently_succeed`
 
 `DefaultRequestHandlerV2.on_cancel_task` dropped the guard V1 had:
 
@@ -69,9 +86,10 @@ asking directly rather than assuming.
 
 ### A mid-run cancel strands the task in `working`, permanently
 
-**Task:** `167506a4` · **Repro:**
+**Task:** `167506a4` (done) · **Repro:**
 `a2a-rig/tests/test_playback.py::test_a_cancel_lands_while_the_run_is_still_going` (strict
-xfail), plus `test_a_cancelled_run_is_stranded_in_working` documenting today's behavior
+xfail), plus `test_a_cancelled_run_is_stranded_in_working` documenting today's behavior; and
+upstream as `test_scenario_19_mid_run_cancel_reaches_a_terminal_state`
 
 Worse than the one above, and found while trying to confirm it *didn't* apply here. A task
 genuinely mid-run satisfies the `_producer_task` guard, so the natural expectation is that
@@ -90,7 +108,11 @@ the only component that writes the task's terminal state. Killing it first means
 1. The executor unwinds through its `CancelledError` path, which emits no status.
 2. The `updater.cancel()` inside the executor's own `cancel()` does enqueue a canceled status,
    but by then it doesn't reach the task store.
-3. `ActiveTask.cancel` returns the task it read *before* cancelling — still `working`.
+3. ~~`ActiveTask.cancel` returns the task it read *before* cancelling — still `working`.~~
+   **Wrong, corrected 2026-08-08 while writing the issue.** `cancel` re-reads via `get_task()`
+   at `active_task.py:753`, after `await self._is_finished.wait()`, so the returned task is
+   fresh. It says `working` because the *store* was never updated, not because the read was
+   stale. Same observed output, different cause. This claim did not ship in the issue.
 
 So the caller gets `working` back, and the task never reaches a terminal state at all. A
 client that cancels has no way to know it's done polling.
@@ -101,8 +123,30 @@ that owns terminal state gets a chance to write one.
 **How to lead:** the three-line observed output above. It's unambiguous and needs no argument
 about intent — a task with no terminal state is broken under anyone's definition.
 
-**File after `79297b49`, or together.** They're the same root cause seen from two states, and
-filing the stranding one first risks it being triaged as a duplicate of a bug nobody's read yet.
+**Filed together** (see the note at the top of this section).
+
+**Two things found while writing the repro that weren't in these notes, and both strengthened
+the report:**
+
+- **V1 does it right in two separate ways.** It has the post-check guard
+  (`default_request_handler.py:233`) *and* it awaits the executor's cancel before killing the
+  producer (L213 vs L224). The correct implementation is sitting in the same codebase, in the
+  file V2 replaced. That turns both findings into one regression story instead of two
+  arguments about intent.
+- **Their own test papers over it, and a maintainer already suspected as much.**
+  `test_scenario_cancel_working_task_empty_cancel` passes only because its executor
+  hand-enqueues the `CANCELED` event, directly under a
+  `# TODO: this should be done automatically by the framework ?` comment. Same shape as the
+  `TodoWrite` finding: a test that supplies the thing it's testing.
+
+**Both bugs are alive on `main` (`cff6727`), not just v1.1.2** — `active_task.py` and
+`default_request_handler.py` are byte-identical to the tag.
+
+**The legacy handler is not a working reference here.** The tempting move was one test
+parametrized on a2a-python's existing `use_legacy` fixture, so it would pass on V1 and fail on
+V2. It doesn't work: with an executor whose `cancel()` is empty, legacy *hangs* rather than
+passing, because `on_cancel_task` waits in `consume_all` for an event that never arrives. Both
+handlers are broken, differently. The shipped tests are V2-only for that reason.
 
 ---
 
@@ -317,12 +361,16 @@ Noted here so the decision not to file is a decision rather than an oversight.
 
 ## Filing order
 
-1. **`79297b49` + `167506a4` to a2a-sdk, together.** Same root cause, two symptoms; the
-   stranding one is the more clearly-broken of the pair and the parked one has the cleaner
-   regression story. Ask about the "producer finished" definition in the same breath, since
-   the answer decides whether `34c83f8c` is a real bug or expected.
-2. **`5dcde5fb` and `34c83f8c` to a2acode**, once the SDK answer is in hand — and file
-   `5dcde5fb` regardless of that answer, since it's worth fixing either way.
+1. ~~**`79297b49` + `167506a4` to a2a-sdk, together.**~~ **DONE** — one issue,
+   [#1170](https://github.com/a2aproject/a2a-python/issues/1170), plus repro PR
+   [#1171](https://github.com/a2aproject/a2a-python/pull/1171).
+   The "producer finished" question was *not* asked outright. Once V1 turned out to guard both
+   paths, the finding stood on its own as a regression, and the parked test was written to pass
+   under either answer. So `34c83f8c`'s fate now hangs on how they respond rather than on a
+   question we posed.
+2. **`5dcde5fb` and `34c83f8c` to a2acode** — `5dcde5fb` is now unblocked and worth filing
+   regardless, since it's the same "cancel writes no terminal state" story from a2acode's side
+   and `#1170` gives it something to point at. `34c83f8c` still wants the SDK response first.
 3. **`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes. The
    `ACPBackend` cost-ceiling nit rides along here — same repo, same size, same "is this
    deliberate?" shape, and it reads better as a pair than as a lone quibble.
