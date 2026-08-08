@@ -13,11 +13,16 @@ it during a live run (``RecordingBackend``) is a later task.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
+import yaml
 from a2acode.backends.base import (
     FileChange, Notice, Plan, Result, TextDelta, Thought, ToolResult, ToolUse,
 )
+
+from .scrub import scrub_cwd
 
 
 def to_scenario_event(event: Any) -> dict[str, Any]:
@@ -89,3 +94,112 @@ def _result_body(result: Result) -> dict[str, Any]:
         "stop_reason": result.stop_reason,
     }
     return {k: v for k, v in body.items() if v is not None}
+
+
+class _RecordingSession:
+    """A BackendSession that tees what passes through it.
+
+    Delegates everything it does not override, so a backend reaching for
+    `set_canceller`, `is_parked`, or anything a2acode adds later still gets the
+    real session. Only `emit` and `request_permission` carry meaning worth
+    recording, and both forward unchanged — the recorder observes, it does not
+    intervene.
+    """
+
+    def __init__(self, inner, sink: list[dict]) -> None:
+        # Bypass __setattr__-free delegation deliberately: these two names are
+        # ours, everything else falls through to the real session.
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_stack", [sink])
+
+    def __getattr__(self, name: str):
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    @property
+    def _current(self) -> list[dict]:
+        return object.__getattribute__(self, "_stack")[-1]
+
+    async def emit(self, event) -> None:
+        self._current.append(to_scenario_event(event))
+        await object.__getattribute__(self, "_inner").emit(event)
+
+    async def request_permission(self, tool_name, tool_input, description=""):
+        node: dict[str, Any] = {"tool": tool_name, "input": dict(tool_input)}
+        if description:
+            node["description"] = description
+        self._current.append({"permission": node})
+
+        decision = await object.__getattribute__(self, "_inner").request_permission(
+            tool_name, tool_input, description
+        )
+
+        # Everything from here belongs inside the branch that was actually
+        # taken. Required, not stylistic: PlaybackBackend._run_events returns
+        # after handling a permission, so a post-gate event left at the top
+        # level would never fire on replay.
+        branch: list[dict] = []
+        node["on_allow" if decision.allow else "on_deny"] = branch
+        object.__getattribute__(self, "_stack").append(branch)
+        return decision
+
+
+class RecordingBackend:
+    """Wraps any Backend and writes what it does as a scenario document."""
+
+    name = "recording"
+
+    def __init__(self, inner, *, out, cwd: str = ".", provenance=None) -> None:
+        self._inner = inner
+        self._out = Path(out)
+        self._cwd = cwd
+        self._prompts: list[str] = []
+        self._plays: list[dict] = []
+        self._provenance = dict(provenance or {})
+
+    async def drive(self, session, request) -> None:
+        events: list[dict] = []
+        proxy = _RecordingSession(session, events)
+        try:
+            await self._inner.drive(proxy, request)
+        except Exception as exc:
+            # A real failure recorded is exactly the coverage recording
+            # otherwise cannot manufacture. Keep it, then let a2acode's real
+            # failure path run untouched.
+            events.append({"error": str(exc)})
+            self._finish(request.prompt, events)
+            raise
+        self._finish(request.prompt, events)
+
+    def _finish(self, prompt: str, events: list[dict]) -> None:
+        self._prompts.append(prompt)
+        self._plays.append({
+            "match": {"regex": f"^{re.escape(prompt)}$"},
+            "events": scrub_cwd(events, self._cwd),
+        })
+        self.write()
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "recorded": {
+                **self._provenance,
+                # Machine-readable because the refresh loop consumes it:
+                # "re-record the library's source prompts" needs the prompts
+                # back. A source list for re-recording, not an index into
+                # `plays` — pruning a play during scrub does not corrupt it.
+                "prompts": list(self._prompts),
+            },
+            "plays": list(self._plays),
+        }
+
+    def write(self) -> None:
+        """Rewrite the whole file. Every turn, not at shutdown."""
+        self._out.parent.mkdir(parents=True, exist_ok=True)
+        self._out.write_text(
+            yaml.safe_dump(self.document(), sort_keys=False, allow_unicode=True)
+        )
+
+    async def aclose(self) -> None:
+        """Forward to the inner backend if it pools anything (ACPBackend does)."""
+        closer = getattr(self._inner, "aclose", None)
+        if closer is not None:
+            await closer()

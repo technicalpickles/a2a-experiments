@@ -73,3 +73,164 @@ def test_session_id_is_dropped_from_a_recorded_result():
 def test_an_unknown_event_type_is_refused():
     with pytest.raises(ValueError, match="cannot record"):
         to_scenario_event(object())
+
+
+import asyncio
+from pathlib import Path
+
+import yaml
+from a2acode.backends.base import PermissionDecision, PermissionRequest
+from a2acode.backends.session import BackendSession
+
+from a2a_playback.recording import RecordingBackend
+from a2a_playback.scenario import load_scenario
+
+
+class _Scripted:
+    """A stand-in inner backend. Runs a caller-supplied coroutine."""
+
+    name = "scripted"
+
+    def __init__(self, body):
+        self._body = body
+
+    async def drive(self, session, request):
+        await self._body(session, request)
+
+
+async def _drive_once(backend, prompt, *, answer=None, context_id="c1"):
+    """Drive one turn, optionally answering a permission request."""
+    session = BackendSession()
+    session.start(lambda s: backend.drive(s, RunRequest(prompt=prompt, context_id=context_id)))
+    events = [e async for e in session.drain()]
+    if events and isinstance(events[-1], PermissionRequest) and answer is not None:
+        session.resolve(PermissionDecision(events[-1].request_id, allow=answer))
+        events += [e async for e in session.drain()]
+    return events
+
+
+async def test_a_recorded_turn_becomes_one_play(tmp_path):
+    async def body(session, request):
+        await session.emit(TextDelta(text="hi\n"))
+        await session.emit(Result(num_turns=1, stop_reason="end_turn"))
+
+    out = tmp_path / "rec.yaml"
+    backend = RecordingBackend(_Scripted(body), out=out, cwd=str(tmp_path))
+    await _drive_once(backend, "do the thing")
+
+    doc = backend.document()
+    assert len(doc["plays"]) == 1
+    assert doc["plays"][0]["events"] == [
+        {"text": "hi\n"},
+        {"result": {"num_turns": 1, "stop_reason": "end_turn"}},
+    ]
+
+
+async def test_the_match_is_an_anchored_escaped_regex(tmp_path):
+    async def body(session, request):
+        await session.emit(Result(num_turns=1))
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    await _drive_once(backend, "Add a /health endpoint.")
+
+    regex = backend.document()["plays"][0]["match"]["regex"]
+    assert regex.startswith("^") and regex.endswith("$")
+    import re
+    assert re.search(regex, "Add a /health endpoint.")
+    assert not re.search(regex, "Please Add a /health endpoint. Now.")
+
+
+async def test_events_after_a_gate_nest_into_the_branch_taken(tmp_path):
+    async def body(session, request):
+        await session.emit(TextDelta(text="before\n"))
+        decision = await session.request_permission("Bash", {"command": "pytest -q"}, "")
+        await session.emit(TextDelta(text=f"after allow={decision.allow}\n"))
+        await session.emit(Result(num_turns=2))
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    await _drive_once(backend, "run it", answer=True)
+
+    events = backend.document()["plays"][0]["events"]
+    assert events[0] == {"text": "before\n"}
+    permission = events[1]["permission"]
+    assert permission["tool"] == "Bash"
+    assert permission["input"] == {"command": "pytest -q"}
+    assert "on_deny" not in permission          # never happened; never invented
+    assert permission["on_allow"] == [
+        {"text": "after allow=True\n"},
+        {"result": {"num_turns": 2}},
+    ]
+
+
+async def test_a_denial_records_on_deny_and_nothing_else(tmp_path):
+    async def body(session, request):
+        decision = await session.request_permission("Bash", {"command": "rm -rf x"}, "")
+        await session.emit(TextDelta(text=f"allow={decision.allow}\n"))
+        await session.emit(Result(num_turns=1))
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    await _drive_once(backend, "delete it", answer=False)
+
+    permission = backend.document()["plays"][0]["events"][0]["permission"]
+    assert "on_allow" not in permission
+    assert permission["on_deny"][0] == {"text": "allow=False\n"}
+
+
+async def test_a_raising_turn_records_an_error_and_still_fails(tmp_path):
+    async def body(session, request):
+        await session.emit(TextDelta(text="partial\n"))
+        raise RuntimeError("the model fell over")
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    session = BackendSession()
+    session.start(lambda s: backend.drive(s, RunRequest(prompt="go", context_id="c1")))
+    with pytest.raises(RuntimeError, match="fell over"):
+        [e async for e in session.drain()]
+
+    events = backend.document()["plays"][0]["events"]
+    assert events == [{"text": "partial\n"}, {"error": "the model fell over"}]
+
+
+async def test_the_file_is_written_after_every_turn(tmp_path):
+    """Real money was just spent; a ctrl-C should not cost the recording."""
+    async def body(session, request):
+        await session.emit(Result(num_turns=1))
+
+    out = tmp_path / "rec.yaml"
+    backend = RecordingBackend(_Scripted(body), out=out, cwd=str(tmp_path))
+
+    await _drive_once(backend, "first prompt", context_id="c1")
+    assert out.exists()
+    assert len(yaml.safe_load(out.read_text())["plays"]) == 1
+
+    await _drive_once(backend, "second prompt", context_id="c2")
+    assert len(yaml.safe_load(out.read_text())["plays"]) == 2
+
+
+async def test_the_written_file_loads_as_a_scenario(tmp_path):
+    """The assumption all of M3 rests on: a recording is a scenario file."""
+    async def body(session, request):
+        await session.emit(TextDelta(text="ok\n"))
+        await session.emit(Result(num_turns=1, stop_reason="end_turn"))
+
+    out = tmp_path / "rec.yaml"
+    backend = RecordingBackend(_Scripted(body), out=out, cwd=str(tmp_path))
+    await _drive_once(backend, "hello")
+
+    scenario = load_scenario(out)
+    assert len(scenario.plays) == 1
+    assert scenario.recorded["prompts"] == ["hello"]
+
+
+async def test_cwd_is_scrubbed_out_of_a_recorded_play(tmp_path):
+    async def body(session, request):
+        await session.emit(ToolUse(
+            name="Read", tool_input={"file_path": f"{tmp_path}/src/app.py"}, tool_use_id="t1"
+        ))
+        await session.emit(Result(num_turns=1))
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    await _drive_once(backend, "read it")
+
+    tool_use = backend.document()["plays"][0]["events"][0]["tool_use"]
+    assert tool_use["input"]["file_path"] == "./src/app.py"
