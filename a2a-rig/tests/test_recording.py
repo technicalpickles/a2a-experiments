@@ -84,6 +84,7 @@ from a2acode.backends.session import BackendSession
 
 from a2a_playback.recording import RecordingBackend
 from a2a_playback.scenario import load_scenario
+from a2a_playback.scrub import scrub_cwd
 
 
 class _Scripted:
@@ -234,3 +235,111 @@ async def test_cwd_is_scrubbed_out_of_a_recorded_play(tmp_path):
 
     tool_use = backend.document()["plays"][0]["events"][0]["tool_use"]
     assert tool_use["input"]["file_path"] == "./src/app.py"
+
+
+async def test_an_exception_after_a_gate_lands_inside_the_branch_taken(tmp_path):
+    """A model that asks to run a command and then falls over is exactly the
+    failure `error` recording exists to capture — and it must land where a
+    replay can reach it, not at the root the gate already left behind."""
+    async def body(session, request):
+        await session.request_permission("Bash", {"command": "pytest -q"}, "")
+        raise RuntimeError("blew up after the gate")
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    session = BackendSession()
+    session.start(lambda s: backend.drive(s, RunRequest(prompt="run it", context_id="c1")))
+    events = [e async for e in session.drain()]
+    assert isinstance(events[-1], PermissionRequest)
+    session.resolve(PermissionDecision(events[-1].request_id, allow=True))
+    with pytest.raises(RuntimeError, match="blew up after the gate"):
+        [e async for e in session.drain()]
+
+    events = backend.document()["plays"][0]["events"]
+    assert events == [{
+        "permission": {
+            "tool": "Bash",
+            "input": {"command": "pytest -q"},
+            "on_allow": [{"error": "blew up after the gate"}],
+        }
+    }]
+
+
+async def test_a_gate_with_nothing_after_it_still_writes_and_warns(tmp_path, capsys):
+    """`scenario.py` refuses a permission whose branches are all empty. The
+    file must still land on disk (a paid run already happened), with a loud
+    warning telling the operator it needs a hand-edit before it can replay."""
+    async def body(session, request):
+        await session.request_permission("Bash", {"command": "pytest -q"}, "")
+
+    out = tmp_path / "r.yaml"
+    backend = RecordingBackend(_Scripted(body), out=out, cwd=str(tmp_path))
+    await _drive_once(backend, "run it", answer=True)
+
+    assert out.exists()
+    written = yaml.safe_load(out.read_text())
+    permission = written["plays"][0]["events"][0]["permission"]
+    assert permission["on_allow"] == []
+
+    captured = capsys.readouterr()
+    assert str(out) in captured.err
+    assert "branch" in captured.err
+
+
+async def test_the_prompt_is_scrubbed_in_both_match_and_provenance(tmp_path):
+    async def body(session, request):
+        await session.emit(Result(num_turns=1))
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    prompt = f"fix {tmp_path}/src/app.py"
+    await _drive_once(backend, prompt)
+
+    expected = scrub_cwd(prompt, str(tmp_path))
+    doc = backend.document()
+    assert doc["recorded"]["prompts"] == [expected]
+    assert str(tmp_path) not in doc["plays"][0]["match"]["regex"]
+    import re
+    assert doc["plays"][0]["match"]["regex"] == f"^{re.escape(expected)}$"
+
+
+async def test_a_second_gate_nests_inside_the_first_branch_taken(tmp_path):
+    async def body(session, request):
+        d1 = await session.request_permission("Bash", {"command": "one"}, "")
+        await session.emit(TextDelta(text=f"first allow={d1.allow}\n"))
+        d2 = await session.request_permission("Bash", {"command": "two"}, "")
+        await session.emit(TextDelta(text=f"second allow={d2.allow}\n"))
+        await session.emit(Result(num_turns=2))
+
+    backend = RecordingBackend(_Scripted(body), out=tmp_path / "r.yaml", cwd=str(tmp_path))
+    session = BackendSession()
+    session.start(lambda s: backend.drive(s, RunRequest(prompt="run it", context_id="c1")))
+
+    events = [e async for e in session.drain()]
+    assert isinstance(events[-1], PermissionRequest)
+    session.resolve(PermissionDecision(events[-1].request_id, allow=True))
+
+    events = [e async for e in session.drain()]
+    assert isinstance(events[-1], PermissionRequest)
+    session.resolve(PermissionDecision(events[-1].request_id, allow=True))
+
+    [e async for e in session.drain()]
+
+    events = backend.document()["plays"][0]["events"]
+    assert events == [{
+        "permission": {
+            "tool": "Bash",
+            "input": {"command": "one"},
+            "on_allow": [
+                {"text": "first allow=True\n"},
+                {
+                    "permission": {
+                        "tool": "Bash",
+                        "input": {"command": "two"},
+                        "on_allow": [
+                            {"text": "second allow=True\n"},
+                            {"result": {"num_turns": 2}},
+                        ],
+                    }
+                },
+            ],
+        }
+    }]

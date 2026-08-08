@@ -14,6 +14,7 @@ it during a live run (``RecordingBackend``) is a later task.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from a2acode.backends.base import (
     FileChange, Notice, Plan, Result, TextDelta, Thought, ToolResult, ToolUse,
 )
 
+from .scenario import ScenarioError, parse_scenario
 from .scrub import scrub_cwd
 
 
@@ -164,13 +166,22 @@ class RecordingBackend:
         except Exception as exc:
             # A real failure recorded is exactly the coverage recording
             # otherwise cannot manufacture. Keep it, then let a2acode's real
-            # failure path run untouched.
-            events.append({"error": str(exc)})
+            # failure path run untouched. Appended through the proxy's own
+            # cursor, not the root `events` list: if the failure came after a
+            # gate was answered, the cursor has already moved into the branch
+            # taken, and an error left at the root would be as unreachable on
+            # replay as any other post-gate event left there.
+            proxy._current.append({"error": str(exc)})
             self._finish(request.prompt, events)
             raise
         self._finish(request.prompt, events)
 
     def _finish(self, prompt: str, events: list[dict]) -> None:
+        # Scrubbed once, then reused for both the match and the provenance
+        # list: the prompt gets the same redaction its events already get, so
+        # neither leaks the recording machine's absolute paths, and the
+        # anchored regex still matches when replayed somewhere else.
+        prompt = scrub_cwd(prompt, self._cwd)
         self._prompts.append(prompt)
         self._plays.append({
             "match": {"regex": f"^{re.escape(prompt)}$"},
@@ -192,11 +203,32 @@ class RecordingBackend:
         }
 
     def write(self) -> None:
-        """Rewrite the whole file. Every turn, not at shutdown."""
+        """Rewrite the whole file. Every turn, not at shutdown.
+
+        Writes first, unconditionally: a paid run already happened, so it
+        must land on disk even if what came out of it cannot replay (a gate
+        with nothing after it, say — `scenario.py` refuses those). Only then
+        does it round-trip the document through the same parser a replay
+        would use, and warn loudly on stderr if that fails. Never raises here
+        — a live recording session should not die over a file that is
+        already safely written — and never edits the document to make it
+        pass: dropping the offending permission would be inventing a run
+        that never occurred.
+        """
         self._out.parent.mkdir(parents=True, exist_ok=True)
+        document = self.document()
         self._out.write_text(
-            yaml.safe_dump(self.document(), sort_keys=False, allow_unicode=True)
+            yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
         )
+        try:
+            parse_scenario(document, path=self._out)
+        except ScenarioError as exc:
+            print(
+                f"warning: {self._out} was written but will not load as a "
+                f"scenario ({exc}); it needs a hand-edit before it can be "
+                f"replayed",
+                file=sys.stderr,
+            )
 
     async def aclose(self) -> None:
         """Forward to the inner backend if it pools anything (ACPBackend does)."""
