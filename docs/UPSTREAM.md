@@ -210,6 +210,30 @@ cannot honor.
 does. Possibly deliberate — ACP fronts agents whose cost accounting isn't a2acode's to enforce
 — so lead with the question rather than the patch.
 
+### The acp backend drops tool-call arguments
+
+**No task yet** · Small, and evidenced by a real recording
+
+Every `tool_use` event out of `ACPBackend` carries an empty `input`, every `tool_result` carries
+an empty `name`, and the tool names are UI labels (`Read File`, `ToolSearch`) rather than tool
+ids (`Read`, `Grep`). Evidence is the promoted recording,
+`a2a-rig/repos/billing-api/scenarios/20-recorded-health.yaml`: sixteen events, and not one
+`tool_use` says *what* it read or edited.
+
+The arguments are demonstrably available at that layer — the `permission` event recorded from
+the same turn carries the full `Edit` payload (`file_path`, `old_string`, `new_string`,
+`replace_all`). So this is a mapping gap in `events_from_update`, not missing upstream data.
+Compare `ClaudeBackend`, whose Phase 2 capture (`docs/captures/phase2-claude-run.jsonl`) does
+carry tool detail.
+
+**Why we care specifically:** a consumer rendering a tool timeline gets "Edit" with no file
+name. It also degrades recordings permanently — a recording is only as good as the events it
+saw, so every scenario captured through the acp path is missing this and re-recording after a
+fix is the only way to get it back.
+
+**Fix shape:** carry `tool_call.raw_input` (and the tool id) into the `ToolUse` event the way
+`request_permission` already does at `acp.py:363`.
+
 ### M4: offer `playback` and `--record` upstream
 
 **Not a bug — the planned contribution.** DESIGN-v3 §7-8. `a2a_playback` is written to drop
@@ -262,6 +286,10 @@ Noted here so the decision not to file is a decision rather than an oversight.
 3. **`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes. The
    `ACPBackend` cost-ceiling nit rides along here — same repo, same size, same "is this
    deliberate?" shape, and it reads better as a pair than as a lone quibble.
+   **The dropped tool-call arguments file separately**, despite being the same repo: it is a
+   plain data-loss bug with a checked-in recording as the repro, not a design question, and
+   bundling it with two "is this deliberate?" nits would bury the one item that has evidence
+   attached.
 4. **`cc7feef9` to a2a-cli** any time. The work already exists.
 
 **`70dc7c04` jumps the queue.** It's the only one here that's a plain feature-is-broken report

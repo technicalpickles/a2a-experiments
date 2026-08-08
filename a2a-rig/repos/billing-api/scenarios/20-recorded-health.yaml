@@ -1,0 +1,112 @@
+# Recorded from a real Claude Code run over ACP, then scrubbed and promoted.
+# `rig-record --backend acp --agent claude` against a small Flask app; see
+# docs/DEVLOG.md for the run and a2a-rig/README.md for the refresh loop.
+#
+# Sorts at 20-* so it lands ahead of the hand-written plays: an imagined
+# play shadowing a real recording of the same prompt is backwards.
+#
+# The permission carries `on_allow` and no `on_deny`, because the live run
+# was answered once. Denying this prompt on replay raises rather than
+# inventing a branch that never happened -- which is why recordings compose
+# with hand-written plays instead of replacing them. The deny path, the
+# abandoned-approval timeout, and scripted failures stay in 30-refactor.yaml.
+#
+# `input.file_path` reads `./app.py` because scrub_cwd rewrote the recording
+# machine's absolute path; the live gate carried the full path.
+recorded:
+  at: '2026-08-08T17:57:41Z'
+  backend: acp:claude
+  a2acode: 0.6.2
+  prompts:
+  - add a /health endpoint to app.py
+plays:
+- match:
+    regex: ^add\ a\ /health\ endpoint\ to\ app\.py$
+  events:
+  - thought: Let
+  - thought: ' me check'
+  - thought: ' for'
+  - thought: ' relevant'
+  - thought: ' skills first, then look at the app.py file.'
+  - tool_use:
+      name: ToolSearch
+      input: {}
+      id: toolu_01FtJ5rbm6ZR8EEkaURAwZ3w
+  - tool_result:
+      id: toolu_01FtJ5rbm6ZR8EEkaURAwZ3w
+      name: ''
+      output: 'Tool: Read
+
+        Tool: Glob'
+  - thought: Let
+  - thought: ' me read app'
+  - thought: .py
+  - thought: .
+  - tool_use:
+      name: Read File
+      input: {}
+      id: toolu_013dv4gVmS18FzZdR6BsjJEw
+  - tool_result:
+      id: toolu_013dv4gVmS18FzZdR6BsjJEw
+      name: ''
+      output: "```\n     1→from flask import Flask, jsonify\n     2→\n     3→app =\
+        \ Flask(__name__)\n     4→\n     5→ITEMS = [\n     6→    {\"id\": 1, \"name\"\
+        : \"widget\", \"price\": 9.99},\n     7→    {\"id\": 2, \"name\": \"gadget\"\
+        , \"price\": 19.99},\n     8→]\n     9→\n    10→\n    11→@app.get(\"/items\"\
+        )\n    12→def list_items():\n    13→    return jsonify(ITEMS)\n    14→\n \
+        \   15→\n    16→@app.get(\"/items/<int:item_id>\")\n    17→def get_item(item_id):\n\
+        \    18→    for item in ITEMS:\n    19→        if item[\"id\"] == item_id:\n\
+        \    20→            return jsonify(item)\n    21→    return jsonify({\"error\"\
+        : \"not found\"}), 404\n    22→\n    23→\n    24→if __name__ == \"__main__\"\
+        :\n    25→    app.run(port=5000)\n    26→\n```"
+  - tool_use:
+      name: ToolSearch
+      input: {}
+      id: toolu_01GTbTUMwXGfnqbbqstUBvtg
+  - tool_result:
+      id: toolu_01GTbTUMwXGfnqbbqstUBvtg
+      name: ''
+      output: 'Tool: Edit'
+  - tool_use:
+      name: Edit
+      input: {}
+      id: toolu_01NcjvjGoSiUArVWBDWG4uQ1
+  - file_change:
+      path: ./app.py
+      diff: "--- a/./app.py\n+++ b/./app.py\n@@ -1 +1,6 @@\n+@app.get(\"/health\"\
+        )\n+def health():\n+    return jsonify({\"status\": \"ok\"})\n+\n+\n @app.get(\"\
+        /items\")\n"
+  - permission:
+      tool: Edit app.py
+      input:
+        file_path: ./app.py
+        old_string: '@app.get("/items")'
+        new_string: "@app.get(\"/health\")\ndef health():\n    return jsonify({\"\
+          status\": \"ok\"})\n\n\n@app.get(\"/items\")"
+        replace_all: false
+      description: Edit app.py
+      on_allow:
+      - file_change:
+          path: ./app.py
+          diff: "--- a/./app.py\n+++ b/./app.py\n@@ -1,4 +1,9 @@\n ]\n+\n+\n+@app.get(\"\
+            /health\")\n+def health():\n+    return jsonify({\"status\": \"ok\"})\n\
+            \ \n \n @app.get(\"/items\")\n"
+      - tool_result:
+          id: toolu_01NcjvjGoSiUArVWBDWG4uQ1
+          name: ''
+      - text: Done
+      - text: . `
+      - text: GET /health` returns
+      - text: ' `{"status": "ok"}'
+      - text: '`.'
+      - result:
+          cost_usd: 0.0760089
+          usage:
+            total_tokens: 91890
+            input_tokens: 11
+            output_tokens: 439
+            thought_tokens: null
+            cached_read_tokens: 79278
+            cached_write_tokens: 12162
+            field_meta: null
+          stop_reason: end_turn

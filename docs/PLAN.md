@@ -217,7 +217,15 @@ is the consumer, which is its own project.
       `RecordingBackend` plus the standalone `rig-record` CLI rather than a flag on
       `rig-serve`; `serve(..., record_out=)` is the shared seam.)*
 - [ ] Re-run the Phase 2 prompts once through `--record`; scrub; check in ≥3 recorded
-      scenarios **composing with** the hand-written ones. *(The original wording said
+      scenarios **composing with** the hand-written ones. *(**Partial, 2026-08-08:** one
+      recording is checked in — `billing-api/scenarios/20-recorded-health.yaml`, a real
+      permission gate answered `allow`, verified by replaying both branches against a live
+      `rig-serve`. The pipeline is proven end to end; this stays unchecked until there are
+      three, because one recording is not a backbone. Two operator preconditions the runbook
+      now carries: the agent's `--cwd` needs a project-level `.claude/settings.json` with
+      `permissions.defaultMode: "default"` or a personal `acceptEdits` silently produces a
+      gateless recording, and `CLAUDE_CONFIG_DIR` is not a usable lever for that because it
+      breaks auth. See DEVLOG 2026-08-08.)* *(The original wording said
       "replacing hand-written ones," which is wrong: a real run answers a permission gate
       once, so a recording carries `on_allow` or `on_deny` and never both. Recordings own the
       happy paths; the hand-written scenarios stay for the deny branch, the abandoned-approval

@@ -149,6 +149,21 @@ Then drive it with any A2A client (`a2a-cli`, a browser, the frontend you're bui
 another terminal. Read the result, scrub whatever the recorder couldn't, and `mv` it into a
 repo's `scenarios/` at the `20-*` prefix.
 
+**Check the agent's permission mode before you start.** If your `~/.claude/settings.json` sets
+`permissions.defaultMode` to `acceptEdits`, the agent edits without ever asking and you get a
+recording with no gate in it — which looks identical to a run that had nothing to approve, so
+you find out by reading the file afterward. Put a project-level override in the `--cwd`:
+
+```jsonc
+// ~/scratch/demo-app/.claude/settings.json
+{ "permissions": { "defaultMode": "default" } }
+```
+
+Precedence is user → project → local → enterprise, last writer wins. Don't reach for
+`CLAUDE_CONFIG_DIR` instead: it does relocate where settings are read from, but Claude Code
+keeps auth state in the config directory too, so the run dies with `Authentication required`
+even when credentials live in the system keychain.
+
 Things the flags encode:
 
 - **`--backend acp`, not `claude`.** `--backend claude` cannot emit a `plan` event at all

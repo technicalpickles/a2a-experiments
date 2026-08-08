@@ -818,3 +818,112 @@ outstanding, and it has to be `--backend acp` (the claude backend can't emit pla
 hand with a client in a second terminal, hitting at least one real permission gate and
 approving it so a recorded `on_allow` exists. Avoid prompts containing "run the tests" or
 "explain" — those belong to `billing-api`'s hand-written plays.
+
+## 2026-08-08 — the recording run
+
+Three runs, not one. The first produced a usable recording with no permission gate in it, the
+second failed to authenticate, and the third is what got promoted:
+`a2a-rig/repos/billing-api/scenarios/20-recorded-health.yaml`, one play, a real gate, answered.
+
+Prompt was `add a /health endpoint to app.py` against `~/scratch/demo-app` at `6890fd7`, via
+`rig-record --backend acp --agent claude`. Reported cost across all runs was about $0.24, which
+as established isn't billed.
+
+### `permissions.defaultMode` is why the first run had no gate
+
+The first recording ran clean and captured nothing to approve: Claude edited `app.py` without
+asking. The plumbing was never the problem — a2acode parks correctly on
+`session/request_permission` (`acp.py:362`) — the agent simply never called it. The cause was
+`permissions.defaultMode: "acceptEdits"` in this machine's `~/.claude/settings.json`, which the
+ACP adapter reads and hands to the Agent SDK (`acp-agent.js:935` →
+`resolvePermissionMode`).
+
+This is the sharpest operator lesson of the milestone, because nothing about it is visible in
+the recording. A gateless recording looks exactly like a run that had nothing to approve. The
+rig's whole premise is that a consumer develops against the real `input-required` machinery,
+and the recording that was supposed to demonstrate it had been silently flattened by a personal
+config setting three directories away from anything in this repo.
+
+### The `CLAUDE_CONFIG_DIR` dead end, and what it accidentally proved
+
+First attempt at a fix was `CLAUDE_CONFIG_DIR` pointed at a clean-room config directory
+(`acp-agent.js:11` reads it; `settings.js:74` resolves user settings under it). Credentials on
+this machine live in the macOS Keychain rather than `~/.claude/.credentials.json`, which looked
+like it made the swap safe. It didn't: Claude Code also needs auth state inside the config
+directory, and the run died with `acp.exceptions.RequestError: Authentication required`.
+
+The accident is the useful part. `RecordingBackend` caught the failure and wrote it:
+
+```yaml
+plays:
+- match: { regex: ^add\ a\ /health\ endpoint\ to\ app\.py$ }
+  events:
+  - error: Authentication required
+```
+
+Write-every-turn and `except BaseException` were both designed against imagined failures — a
+ctrl-C, a crash mid-write. This is the first time a real unplanned failure hit that path, and
+the turn landed on disk instead of evaporating. Kept as `scratch/rec-health-2.yaml`.
+
+The fix that worked is narrower and leaves auth alone entirely: a **project-level**
+`.claude/settings.json` in the agent's `--cwd` with `permissions.defaultMode: "default"`.
+Precedence is user → project → local → enterprise, last writer wins on `defaultMode`
+(`settings.js:124-129`), so the project file overrides the user's `acceptEdits` without
+relocating anything. `~/scratch/demo-app/.claude/settings.json` now carries it, and re-recording
+depends on it staying there.
+
+### What the recording proves that the round-trip test couldn't
+
+The keystone test records `playback` through `playback`, which pins the serializer but says
+nothing about a live agent. This run pins three things it couldn't:
+
+- **`scrub_cwd` fires on a real permission payload.** The live gate carried
+  `file_path: /Users/…/scratch/demo-app/app.py`; the recorded and replayed gate carries
+  `./app.py`. The Important-3 fix from the recording-backend task, confirmed against real
+  traffic rather than a fixture.
+- **Only the taken branch exists.** The recorded `permission` has `on_allow` and no `on_deny`.
+  Replaying the same prompt and answering `deny` produces `failed`, not an invented answer.
+  That is the "compose, don't replace" rule holding on real output.
+- **The gate replays as a gate.** Serving the promoted repo and sending the recorded prompt
+  parks in `input_required` with the tool name and args on the status metadata, then `allow`
+  resumes to `completed` with the recorded diff and response text.
+
+### What it did not capture
+
+- **No `plan` event.** The acp backend was chosen precisely because `--backend claude` can't
+  emit one (`70dc7c04`). The task turned out too small for Claude to build a plan at all, so
+  the plan path is still unexercised by a recording. A bigger prompt would be needed, and it
+  is not obvious a prompt can be written that *reliably* provokes a plan — which is the same
+  "whether a real model does X is a judgment call" problem that motivates hand-written plays.
+- **Tool arguments are dropped.** Every recorded `tool_use` has `input: {}` and every
+  `tool_result` has `name: ''`, and tool names arrive as UI labels (`Read File`, `ToolSearch`)
+  rather than tool ids. The permission payload carries full args, so the loss is specific to
+  the tool-call events. Filed in `docs/UPSTREAM.md`.
+- **Two `file_change` events for one `Edit`**, one before the gate and one inside `on_allow`,
+  with different diffs — ACP streams a preview and then the applied change. Left in, because
+  it is what the real backend emits and a consumer has to tolerate it.
+
+One thing was scrubbed by hand beyond what `scrub_cwd` does: a `<system-reminder>` block that
+Claude Code embeds in `Read` output rode along inside a `tool_result`. It is harness-internal
+text, and a consumer replaying the recording should see the file, not the agent's instructions
+to itself.
+
+### Verification
+
+```
+uv run pytest --backend playback   →  165 passed, 4 xfailed, 7.37s
+uv run pytest --backend echo       →  165 passed, 4 xfailed, 8.33s
+```
+
+Plus an out-of-suite replay against a live `rig-serve`: parks → `allow` → `completed` with the
+recorded diff and text intact, and `deny` → `failed`. Play order after promotion is the
+documented ladder — recorded `20-*` first, then `30-refactor.yaml`'s two `contains` plays, then
+`90-greeting.yaml`'s `turn: 1`, then `99-default.yaml`. The suite needed zero edits again.
+
+### Outcome
+
+The library's backbone now has one real recording in it, and the record → scrub → promote →
+replay loop has been run end to end by a human-driven client against live inference. PLAN's
+Phase 7 bullet asks for **three or more** recorded scenarios, so it stays unchecked: one
+recording is a proven pipeline, not a backbone. What is settled is that the pipeline works and
+what it costs to run — the remaining recordings are repetition, not risk.
