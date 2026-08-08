@@ -1128,3 +1128,24 @@ Went looking for what the filings invalidated. Five things:
   `ruff format`, and the fork/branch/PR arrangement.
 
 Rig suite still 165 passed / 4 xfailed, so none of the comment edits moved behavior.
+
+### The habit that came out of it
+
+Promoted "look for the test that supplies the thing it's testing" to a standing habit in
+UPSTREAM.md, alongside lead-with-the-diff. Two for two: a2acode's plan test hand-builds
+`ToolUseBlock(name="TodoWrite")` and a2a-python's cancel test hand-enqueues the `CANCELED`
+event. Both bugs survived large green suites *because* of their tests.
+
+The practical version: when a finding seems too obvious to have gone unnoticed, go read the
+test that should have caught it. That's usually where the report gets good, because it turns
+"you have a bug" into "you have a blind spot", which is the more useful thing to hand a
+maintainer, and it's the half neither issue would have had otherwise.
+
+Also fixed a line in UPSTREAM.md's preamble that survived the last pass and contradicted the
+new one: it promised writing an issue "shouldn't mean re-deriving any of it a month later."
+An entry saves you the hunt, not the verification.
+
+Filed `3bbf57b5` for the other half of Josh's point: contributing the check upstream rather
+than only filing the bugs it finds. Two shapes, an integration test in a2acode asserting the
+session offers whatever tool a backend keys on (already suggested inside a2acode#37), and
+proposing it as testing guidance in the repos' own contributor docs.

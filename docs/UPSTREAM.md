@@ -13,13 +13,23 @@ correction if it had shipped. Re-derive from source before filing, always.
 taskwarrior task (project `a2a-experiments`, tag `a2a`) — that's the actionable backlog and
 where status lives. What's here is the context a report needs: the trace, the repro, the
 framing that will land, and the parts we're not sure about. Writing an issue shouldn't mean
-re-deriving any of it a month later.
+*rediscovering* any of it a month later — but it does mean re-deriving it, per the note above.
+An entry here saves you the hunt, not the verification.
 
-Two habits worth keeping:
+Three habits worth keeping:
 
 - **Lead with the diff, not the philosophy.** Several of these could be argued as intended
   behavior. An issue that opens with "V1 did X, V2 does Y" starts a conversation about a
   regression; one that opens with "cancel *should* mean..." starts an argument about design.
+- **Look for the test that supplies the thing it's testing.** Two for two so far, and it is the
+  most reliable smell in this whole exercise. a2acode's plan test hand-builds
+  `ToolUseBlock(name="TodoWrite")`, so it cannot notice the tool was renamed out from under it.
+  a2a-python's cancel test hand-enqueues the `CANCELED` event, so it cannot notice the framework
+  never writes one. Both bugs survived large green suites *because* of their tests, not despite
+  them. When a finding seems too obvious to have gone unnoticed, go read the test that should
+  have caught it — the answer is usually there, and it makes the report much better than the bug
+  alone. It also reframes the issue from "you have a bug" to "you have a blind spot", which is
+  the more useful thing to hand a maintainer.
 - **Run the final text through the `writing-voice` skill.** These drafts are notes to
   ourselves; an issue body is outbound prose with my name on it.
 
