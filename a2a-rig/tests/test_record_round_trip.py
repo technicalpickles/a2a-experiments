@@ -58,47 +58,72 @@ async def test_a_recorded_playback_run_replays_as_itself(tmp_path, http_client):
     assert replayed.status_texts == original.status_texts
 
 
-async def test_a_recorded_gate_replays_and_the_other_branch_is_loud(tmp_path, http_client):
-    """Recording the allow path gives on_allow and nothing else.
+async def test_a_recorded_gate_replays_the_allow_branch_and_the_other_branch_is_loud(
+    tmp_path, http_client
+):
+    """The gate spans two `execute` calls but one `drive()` — the session
+    parks inside `request_permission` — so it is still exactly one recorded
+    play, holding only the branch actually taken (on_allow).
 
-    The gate spans two `execute` calls but one `drive()` — the session parks
-    inside `request_permission` — so it is still exactly one recorded play.
+    Replaying it must reproduce both halves of that recorded run — the parked
+    phase (plan, the read, the pre-gate text) and the resumed phase (the
+    nested on_allow events: another tool_use, the file_change already landed
+    on disk, the closing text and result) — not just the gate's shape. Then,
+    on a fresh task against the same replay server, denying must fail loudly
+    rather than complete on a branch that was never scripted.
     """
     out = tmp_path / "gated.yaml"
     prompt = "add a /health endpoint and run the tests"
 
     with serve(repo=REPO, record_out=out) as url:
         client = await _client(url, http_client)
-        parked = await send(client, prompt)
-        assert parked.final_state == "input_required"
-        resumed = await send(
-            client, "allow", task_id=parked.task_id, context_id=parked.context_id
+        recorded_parked = await send(client, prompt)
+        assert recorded_parked.final_state == "input_required"
+        recorded_resumed = await send(
+            client,
+            "allow",
+            task_id=recorded_parked.task_id,
+            context_id=recorded_parked.context_id,
         )
-        assert resumed.final_state == "completed"
+        assert recorded_resumed.final_state == "completed"
 
     plays = load_scenario(out).plays
     assert len(plays) == 1, "a gated turn is one drive, so one play"
-    permission = next(e["permission"] for e in plays[0].events if "permission" in e)
-    assert "on_allow" in permission
+    permission = next(
+        (e["permission"] for e in plays[0].events if "permission" in e), None
+    )
+    assert permission is not None, "expected a recorded permission event"
+    on_allow = permission.get("on_allow")
+    assert on_allow, "on_allow must be non-empty, or replay could never reach it"
     assert "on_deny" not in permission, "a run that was allowed never saw a denial"
-
-
-async def test_replaying_a_recorded_gate_and_denying_is_loud(tmp_path, http_client):
-    """The other half: the unrecorded branch fails the task rather than
-    completing it empty."""
-    out = tmp_path / "gated.yaml"
-    prompt = "add a /health endpoint and run the tests"
-
-    with serve(repo=REPO, record_out=out) as url:
-        client = await _client(url, http_client)
-        parked = await send(client, prompt)
-        await send(client, "allow", task_id=parked.task_id, context_id=parked.context_id)
+    kinds = {kind for event in on_allow for kind in event}
+    assert {"tool_use", "text", "result"} <= kinds
 
     with serve(backend="playback", repo=_promote(out, tmp_path / "replayed")) as url:
         client = await _client(url, http_client)
-        parked = await send(client, prompt)
+        replayed_parked = await send(client, prompt)
+        assert replayed_parked.final_state == "input_required"
+        assert replayed_parked.artifact_text() == recorded_parked.artifact_text()
+        assert replayed_parked.status_texts == recorded_parked.status_texts
+
+        replayed_resumed = await send(
+            client,
+            "allow",
+            task_id=replayed_parked.task_id,
+            context_id=replayed_parked.context_id,
+        )
+        assert replayed_resumed.final_state == "completed"
+        assert replayed_resumed.artifact_text() == recorded_resumed.artifact_text()
+        assert replayed_resumed.status_texts == recorded_resumed.status_texts
+
+        # A fresh task against the same replay server: the unscripted branch.
+        parked_again = await send(client, prompt)
+        assert parked_again.final_state == "input_required"
         denied = await send(
-            client, "deny", task_id=parked.task_id, context_id=parked.context_id
+            client,
+            "deny",
+            task_id=parked_again.task_id,
+            context_id=parked_again.context_id,
         )
 
     assert denied.final_state == "failed"
