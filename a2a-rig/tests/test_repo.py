@@ -139,6 +139,24 @@ def test_a_malformed_scenario_names_its_file(tmp_path):
         load_repo(home)
 
 
+def test_a_permission_with_no_branches_is_rejected_at_load(tmp_path):
+    """A gate that can do nothing on any answer is a mistake, not a valid state."""
+    home = _repo(
+        tmp_path,
+        "gateless",
+        scenarios={
+            "only.yaml": """
+plays:
+  - match: {}
+    events:
+      - permission: { tool: Bash, input: { command: "ls" } }
+"""
+        },
+    )
+    with pytest.raises(ScenarioError, match="at least one branch"):
+        load_repo(home)
+
+
 def test_load_repos_reads_every_directory(tmp_path):
     _repo(tmp_path, "beta")
     _repo(tmp_path, "alpha")

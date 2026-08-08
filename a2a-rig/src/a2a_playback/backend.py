@@ -32,7 +32,7 @@ from a2acode.backends.base import (
 from a2acode.backends.session import BackendSession
 
 from .repo import Repo
-from .scenario import ScenarioError, message_of
+from .scenario import Play, ScenarioError, message_of
 
 
 class ScriptedError(RuntimeError):
@@ -82,13 +82,14 @@ class PlaybackBackend:
     async def drive(self, session: BackendSession, request: RunRequest) -> None:
         turn = self._next_turn(request.context_id)
         play = self.repo.select(request.prompt, turn)
-        await self._run_events(session, play.events, request)
+        await self._run_events(session, play.events, request, play)
 
     async def _run_events(
         self,
         session: BackendSession,
         events: list[dict[str, Any]],
         request: RunRequest,
+        play: Play,
     ) -> None:
         for event in events:
             (kind, body), = event.items()
@@ -96,7 +97,7 @@ class PlaybackBackend:
             # approval that arrives the instant you ask reads as a UI bug.
             await self._delay(body)
             if kind == "permission":
-                await self._permission(session, body, request)
+                await self._permission(session, body, request, play)
                 # The branch we took carries its own terminal `result`; nothing
                 # after a permission event in the same list would be reachable
                 # in a real run either.
@@ -106,7 +107,11 @@ class PlaybackBackend:
             await session.emit(self._to_backend_event(kind, body, request))
 
     async def _permission(
-        self, session: BackendSession, body: dict[str, Any], request: RunRequest
+        self,
+        session: BackendSession,
+        body: dict[str, Any],
+        request: RunRequest,
+        play: Play,
     ) -> None:
         asking = session.request_permission(
             body["tool"],
@@ -117,24 +122,51 @@ class PlaybackBackend:
         if timeout_ms is None:
             # No timeout is the default on purpose: a gate that quietly expired
             # would turn a slow reviewer into a denial nobody scripted.
-            branch = await self._answered(asking, body)
+            branch = await self._answered(asking, body, play)
         else:
             try:
                 branch = await self._answered(
-                    asyncio.wait_for(asking, float(timeout_ms) / 1000.0), body
+                    asyncio.wait_for(asking, float(timeout_ms) / 1000.0), body, play
                 )
             except TimeoutError:
                 # Nobody answered. The request stays pending in the session, so
                 # a caller who does eventually reply resumes into this branch
                 # rather than the one they asked for — which is the honest
                 # rendering of having walked away.
-                branch = body.get("on_timeout") or body.get("on_deny") or []
-        await self._run_events(session, branch, request)
+                branch = self._branch(body, "on_timeout", play, fallback="on_deny")
+        await self._run_events(session, branch, request, play)
 
-    @staticmethod
-    async def _answered(asking, body: dict[str, Any]) -> list[dict[str, Any]]:
+    async def _answered(
+        self, asking, body: dict[str, Any], play: Play
+    ) -> list[dict[str, Any]]:
         decision = await asking
-        return body.get("on_allow" if decision.allow else "on_deny") or []
+        return self._branch(body, "on_allow" if decision.allow else "on_deny", play)
+
+    def _branch(
+        self,
+        body: dict[str, Any],
+        name: str,
+        play: Play,
+        *,
+        fallback: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """The branch an answer selects, or a loud failure.
+
+        Absent and empty are treated alike: both are a dead end that would end
+        the turn with no `result`, which reads to a frontend as its own bug.
+        A recording carries only the branch that was actually taken, so this is
+        the common way to meet an unrecorded path.
+        """
+        events = body.get(name) or (body.get(fallback) if fallback else None)
+        if not events:
+            wanted = name if not fallback else f"{name}` or `{fallback}"
+            raise ScenarioError(
+                f"repo {self.repo.repo_id!r}: {play.describe()} reached `{wanted}` "
+                f"on tool {body.get('tool')!r}, which is not scripted. A recording "
+                f"holds only the branch that was taken — script it, or record a run "
+                f"that takes it. Refusing to guess."
+            )
+        return events
 
     async def _delay(self, body: Any) -> None:
         speed = _speed()

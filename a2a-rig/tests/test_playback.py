@@ -424,6 +424,36 @@ async def test_a_permission_without_a_timeout_waits_indefinitely():
         await asyncio.wait_for(_events(session), timeout=0.2)
 
 
+async def test_an_unscripted_permission_branch_fails_loudly():
+    """A recording holds only the branch that was taken. Taking the other one
+    must say so, not end the turn in silence with no result."""
+    session = _driven(_gate(
+        input={"command": "pytest -q"},
+        on_allow=[{"result": {"num_turns": 1, "stop_reason": "end_turn"}}],
+    ))
+
+    events = await _events(session)
+    assert type(events[-1]).__name__ == "PermissionRequest"
+
+    session.resolve(PermissionDecision(request_id=events[-1].request_id, allow=False))
+    with pytest.raises(ScenarioError, match="on_deny"):
+        await _events(session)
+
+
+async def test_a_recorded_allow_branch_still_replays():
+    """The companion case: the branch that *was* recorded works untouched."""
+    session = _driven(_gate(
+        input={"command": "pytest -q"},
+        on_allow=[{"result": {"num_turns": 1, "stop_reason": "end_turn"}}],
+    ))
+
+    events = await _events(session)
+    session.resolve(PermissionDecision(request_id=events[-1].request_id, allow=True))
+    resumed = await _events(session)
+
+    assert type(resumed[-1]).__name__ == "Result"
+
+
 # --- Pacing ---------------------------------------------------------------
 #
 # Scenarios run flat out by default, which is what makes the suite fast. A demo
