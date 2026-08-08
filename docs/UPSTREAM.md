@@ -1,7 +1,8 @@
 # Upstream issues to file
 
 Findings from this project that belong in someone else's repo, and what to say when filing
-them. Nothing here has been reported yet.
+them. One filed so far (`70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37));
+the rest are still drafts.
 
 **This doc is the "why", taskwarrior is the "when".** Each entry carries the UUID of its
 taskwarrior task (project `a2a-experiments`, tag `a2a`) — that's the actionable backlog and
@@ -139,7 +140,12 @@ observation alongside the bug is more useful than the bug alone.
 
 ### The claude backend can no longer emit a `plan` event at all
 
-**Task:** `70dc7c04` · **Evidence:** `docs/captures/phase5-session-tools.json`,
+**FILED 2026-08-08:** [kanywst/a2acode#37](https://github.com/kanywst/a2acode/issues/37). Body
+kept at `scratch/issue-70dc7c04.md`. The offer to send a PR was cut before posting — the fix
+needs cross-call list state, so it's not a drive-by, and it can be offered later if the
+maintainer likes the shape.
+
+**Task:** `70dc7c04` (done) · **Evidence:** `docs/captures/phase5-session-tools.json`,
 `docs/captures/phase5-plan-probe.jsonl`
 
 `backends/claude.py` derives the agent's plan from one tool name:
@@ -326,7 +332,9 @@ Noted here so the decision not to file is a decision rather than an oversight.
    attached.
 4. **`cc7feef9` to a2a-cli** any time. The work already exists.
 
-**`70dc7c04` jumps the queue.** It's the only one here that's a plain feature-is-broken report
-rather than a design conversation: reproducible, evidenced by a tool-list dump, and provably
-not the reporter's setup since the ACP backend does the same job fine. Nothing about it waits
-on the SDK cancel answer. File it first, or alongside the a2a-sdk pair.
+**`70dc7c04` jumped the queue and is filed** ([a2acode#37](https://github.com/kanywst/a2acode/issues/37),
+2026-08-08). It was the only plain feature-is-broken report rather than a design conversation:
+reproducible, evidenced by a tool-list dump, and provably not the reporter's setup since the ACP
+backend does the same job fine. Nothing about it waited on the SDK cancel answer.
+
+So the queue now starts at step 1 above — the a2a-sdk cancel pair.

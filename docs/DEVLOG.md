@@ -1018,3 +1018,36 @@ gated edit run, a multi-gate run with an evolving plan, and a deny that complete
 "recordings own the happy paths, hand-written plays own deny" split from the last entry is no
 longer accurate — recordings own whichever branch the live run took, and a live run can be
 *steered* to the interesting one by choosing the mode before recording.
+
+## 2026-08-08 — the first upstream issue
+
+Nine findings had been sitting in `docs/UPSTREAM.md` with zero filed. Filed one:
+[kanywst/a2acode#37](https://github.com/kanywst/a2acode/issues/37), the dead `plan` events in
+the claude backend (`70dc7c04`).
+
+It went first for the reason UPSTREAM's filing order already argued: it's the only finding in
+the pile that's a plain feature-is-broken report instead of a design conversation. Everything
+else either waits on the a2a-sdk cancel answer or opens with "is this deliberate?", and a first
+contact that starts an argument about intent is a worse opening than one that starts with a
+tool-list dump.
+
+Every claim in the body was re-verified against source before posting rather than trusted from
+the notes: `_PLAN_TOOL = "TodoWrite"` still at `backends/claude.py:60` on v0.6.2, the synthetic
+`ToolUseBlock(name="TodoWrite")` still at `tests/test_claude_backend.py:104`, 29 tools in
+`phase5-session-tools.json` with no `TodoWrite`, 0 plan events in the probe against 3 in the ACP
+run. The notes held up, but the point of writing the issue from the code is that a month-old
+note is a claim, not evidence.
+
+Two judgment calls worth recording:
+
+- **The offer to send a PR got cut.** The draft ended with one. The fix isn't a drive-by:
+  `TodoWrite` carried the whole list per call while `TaskCreate`/`TaskUpdate` mutate one task at
+  a time, and `Plan` is emitted by replacement, so a real fix has to hold list state across
+  calls. Offering the patch commits to that work before knowing whether the maintainer even
+  wants the event shaped that way. It can be offered after they respond.
+- **The version got noted, not chased.** The capture ran on Claude Code 2.1.224 and this machine
+  is on 2.1.226. Re-running the dump to make the number current would have been cheap, but the
+  report is about a rename that already happened, so the honest move was stating what was tested
+  and what wasn't rather than implying a fresher run than actually happened.
+
+Body kept at `scratch/issue-70dc7c04.md` so the next one has a shape to copy.
