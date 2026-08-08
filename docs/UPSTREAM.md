@@ -1,13 +1,17 @@
 # Upstream issues to file
 
 Findings from this project that belong in someone else's repo, and what to say when filing
-them. Two filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
-and `79297b49`+`167506a4` → [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170)
-with repro PR [#1171](https://github.com/a2aproject/a2a-python/pull/1171). The rest are drafts.
+them. Three filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
+`79297b49`+`167506a4` → [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170)
+with repro PR [#1171](https://github.com/a2aproject/a2a-python/pull/1171), and `5dcde5fb` →
+[a2acode#38](https://github.com/kanywst/a2acode/issues/38). The rest are drafts.
 
-**Writing the issue is what verifies the note.** Both filings turned up claims here that were
-wrong or incomplete, and one of them (the stale-read mechanism, below) would have been a public
-correction if it had shipped. Re-derive from source before filing, always.
+**Writing the issue is what verifies the note.** All three filings turned up claims here that
+were wrong or incomplete, and one (the stale-read mechanism, below) would have been a public
+correction if it had shipped. Re-derive from source before filing, always. Note the third case
+was the most valuable: the wrong claim (`5dcde5fb`'s "written for a disconnected client") wasn't
+just an error to avoid shipping, it was hiding the *better* framing underneath it. Re-deriving
+isn't damage control, it's where the report gets good.
 
 **This doc is the "why", taskwarrior is the "when".** Each entry carries the UUID of its
 taskwarrior task (project `a2a-experiments`, tag `a2a`) — that's the actionable backlog and
@@ -21,7 +25,7 @@ Three habits worth keeping:
 - **Lead with the diff, not the philosophy.** Several of these could be argued as intended
   behavior. An issue that opens with "V1 did X, V2 does Y" starts a conversation about a
   regression; one that opens with "cancel *should* mean..." starts an argument about design.
-- **Look for the test that supplies the thing it's testing.** Two for two so far, and it is the
+- **Look for the test that supplies the thing it's testing.** Three for three, and it is the
   most reliable smell in this whole exercise. a2acode's plan test hand-builds
   `ToolUseBlock(name="TodoWrite")`, so it cannot notice the tool was renamed out from under it.
   a2a-python's cancel test hand-enqueues the `CANCELED` event, so it cannot notice the framework
@@ -30,6 +34,11 @@ Three habits worth keeping:
   have caught it — the answer is usually there, and it makes the report much better than the bug
   alone. It also reframes the issue from "you have a bug" to "you have a blind spot", which is
   the more useful thing to hand a maintainer.
+  **The third case ([#38](https://github.com/kanywst/a2acode/issues/38)) generalized the
+  habit:** sometimes the answer is that there's no test at all. `AgentExecutor.cancel` and
+  `_pump`'s CancelledError branch have zero coverage, because a2acode's cancel tests all sit a
+  layer below the protocol. So the question isn't only "what does the test fake?" but "what
+  layer does the coverage stop at?" Same payoff either way.
 - **Run the final text through the `writing-voice` skill.** These drafts are notes to
   ourselves; an issue body is outbound prose with my name on it.
 
@@ -164,20 +173,53 @@ handlers are broken, differently. The shipped tests are V2-only for that reason.
 
 ### `_pump`'s CancelledError branch emits no terminal state
 
-**Task:** `5dcde5fb` · **Pairs with:** `167506a4`
+**FILED 2026-08-08:** [kanywst/a2acode#38](https://github.com/kanywst/a2acode/issues/38), which
+is the body of record.
+
+**Task:** `5dcde5fb` (done) · **Pairs with:** `167506a4`
 
 `executor.py`'s `_pump` handles `asyncio.CancelledError` by dropping the session and
-re-raising, deliberately without emitting a status. That branch was written for a
+re-raising, deliberately without emitting a status. ~~That branch was written for a
 *disconnected client*, where there is genuinely nobody left to tell — a reasonable call. But a
 deliberate cancel arrives through the same branch, and there the caller is very much still
-listening.
+listening.~~ **Half wrong, corrected 2026-08-08 while writing the issue.** The second sentence
+holds. The first does not: under `a2a-sdk` 1.1.x's V2 handler, a disconnected client *cannot
+reach this branch*, and neither can a timeout.
 
-**Suggestion:** distinguish "client vanished" from "cancelled on purpose" and close the task
-out in the second case. That would make a2acode robust regardless of what the SDK does about
-the ordering, which is the more useful place to fix it if the SDK conversation stalls.
+- The producer is a detached `asyncio.create_task` (`active_task.py:490`), so an HTTP client
+  going away doesn't cancel it. Subscriber teardown runs `_maybe_cleanup`, which no-ops unless
+  `_is_finished` is already set (`active_task.py:815-819`) — mid-run it isn't, so the run
+  continues to completion and writes its terminal state normally.
+- There is no timeout mechanism: zero hits for `wait_for`/`timeout` in all of `active_task.py`.
+- The only live callers of `_producer_task.cancel()` are `ActiveTask.cancel` (`:733`, a
+  deliberate cancel, caller still listening) and `aclose()` (`:790`, server shutdown, where the
+  queues are already closed `immediate=True` so emitting reaches nothing anyway).
 
-**Framing note:** this is upstream's code doing something defensible in the case it was
-written for. Present it as a case they hadn't hit, not as a mistake.
+Confirmed a2acode is on that path: `DefaultRequestHandler = DefaultRequestHandlerV2`
+(`request_handlers/__init__.py:46`).
+
+**This inverted the framing, and it's what made the issue good.** Not "a case they hadn't hit"
+but "the comment names a case that stopped reaching this branch, and the only case that does
+reach it is the one handled wrong."
+
+**Suggestion as filed:** `await updater.cancel()` in the branch before re-raising. It lands
+where `AgentExecutor.cancel`'s existing `updater.cancel()` doesn't, because the producer's
+`finally` closes the queue with `close(immediate=False)` — a graceful close that still drains
+what's already enqueued (`event_queue.py:194-196`). **Reasoned from source, never tested.**
+Flagged as such in the issue body rather than asserted.
+
+**The blind-spot smell went three for three, in a new shape.** Not a test that supplies the
+thing it's testing — *no test at all*. `tests/test_executor.py` has zero hits for `.cancel(`
+or `CancelledError`, so `AgentExecutor.cancel` and this branch are uncovered. The cancel tests
+that exist (`test_smoke.py`, `test_acp.py`) all sit at the `BackendSession`/ACP layer. Cancel
+is well covered as "does the backend stop," never as "does the task close out."
+
+**Don't hand them the out.** The first draft said "if #1170 lands, a2acode is fixed without any
+change here." True, and an argument for closing the issue. Josh caught it: we have no read on
+the SDK maintainers' turnaround, so leaning on their fix is betting on an unknown. Rewritten to
+cross-reference #1170 for the full picture, state plainly that the timeline is unknown, keep
+the double-emit disclosure (redundant, not conflicting), and end on the direct assertion:
+*this is a2acode's terminal state to write, and right now nothing writes it.*
 
 ### A task parked in `input-required` cannot be cancelled
 
@@ -378,9 +420,12 @@ Noted here so the decision not to file is a decision rather than an oversight.
    paths, the finding stood on its own as a regression, and the parked test was written to pass
    under either answer. So `34c83f8c`'s fate now hangs on how they respond rather than on a
    question we posed.
-2. **`5dcde5fb` and `34c83f8c` to a2acode** — `5dcde5fb` is now unblocked and worth filing
-   regardless, since it's the same "cancel writes no terminal state" story from a2acode's side
-   and `#1170` gives it something to point at. `34c83f8c` still wants the SDK response first.
+2. ~~**`5dcde5fb` and `34c83f8c` to a2acode**~~ **`5dcde5fb` DONE** —
+   [#38](https://github.com/kanywst/a2acode/issues/38). Note the premise this entry was filed
+   under was wrong: `5dcde5fb` is *not* "the same story from a2acode's side." Re-deriving showed
+   the two fixes are independent and each individually sufficient, so it neither depends on
+   `#1170` nor completes it. It was filed on its own merits (a2acode can fix itself now, without
+   waiting on another repo). `34c83f8c` still wants the SDK response first.
 3. **`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes. The
    `ACPBackend` cost-ceiling nit rides along here — same repo, same size, same "is this
    deliberate?" shape, and it reads better as a pair than as a lone quibble.

@@ -1149,3 +1149,83 @@ Filed `3bbf57b5` for the other half of Josh's point: contributing the check upst
 than only filing the bugs it finds. Two shapes, an integration test in a2acode asserting the
 session offers whatever tool a backend keys on (already suggested inside a2acode#37), and
 proposing it as testing guidance in the repos' own contributor docs.
+
+## 2026-08-08 — the third filing, and a premise that had gone stale
+
+Filed `5dcde5fb` as [a2acode#38](https://github.com/kanywst/a2acode/issues/38). Third of nine
+out. Started by answering a scoping question from Josh, and the answer changed the issue.
+
+### The question: are #38 and #1170 dependencies?
+
+No, and they aren't halves of one story either, which is how the handoff had them framed
+("a2acode's half of the same cancel story"). They're independent fixes for the same symptom
+and each one alone is sufficient:
+
+- a2acode's `AgentExecutor.cancel` (`executor.py:471`) **already** calls `updater.cancel()`.
+  The terminal state isn't missing from the code, it just arrives after `ActiveTask.cancel`
+  has killed the producer and the producer's `finally` has closed the queue. Fix the SDK
+  ordering (#1170) and a2acode needs no change.
+- Conversely, emitting from inside `_pump`'s CancelledError branch gets the event into the
+  queue *before* that close, and `close(immediate=False)` is graceful, draining what's already
+  enqueued (`event_queue.py:194-196`). Fix a2acode and the SDK ordering stops mattering.
+
+So the honest reason to file it was never "it completes #1170." It's that a2acode is broken
+today and can fix itself without waiting on another repo's maintainers.
+
+### The re-derivation earned its keep again, third time running
+
+The entry said the branch "was written for a *disconnected client*, where there is genuinely
+nobody left to tell — a reasonable call." Under `a2a-sdk` 1.1.x's V2 handler that's false, and
+so is the "timed out" half of the code comment:
+
+- The producer is a detached `asyncio.create_task` (`active_task.py:490`), so an HTTP client
+  disconnecting doesn't cancel it. Subscriber teardown runs `_maybe_cleanup`, which no-ops
+  unless `_is_finished` is set (`:815-819`); mid-run it isn't, so the run finishes normally.
+- No timeout mechanism exists at all. Zero hits for `wait_for`/`timeout` in `active_task.py`.
+- Only two things cancel the producer: `ActiveTask.cancel` (`:733`) and `aclose()` (`:790`,
+  shutdown, queues already closed `immediate=True`).
+
+Confirmed a2acode is on that path (`DefaultRequestHandler = DefaultRequestHandlerV2`).
+
+That inverts the framing from "a case they hadn't hit" to "the comment names a case that
+stopped reaching this branch, and the only case that does reach it is handled wrong." Stronger,
+and it's a blind-spot story rather than a you-have-a-bug story.
+
+Worth noting what kind of error that was. The stale-read claim last time was a wrong mechanism
+to avoid shipping. This one was wrong *and* sitting on top of the better framing. Re-deriving
+isn't damage control, it's where the report gets good. Preamble updated to say so.
+
+### The blind-spot smell generalized
+
+Three for three, but in a new shape: not a test that supplies the thing it's testing, no test
+at all. `tests/test_executor.py` has zero hits for `.cancel(` or `CancelledError`, so
+`AgentExecutor.cancel` and this branch are uncovered. The cancel tests that exist
+(`test_smoke.py`, `test_acp.py`) all sit at the `BackendSession`/ACP layer. Cancel is well
+covered as "does the backend stop," never as "does the task close out."
+
+So the habit is really two questions: what does the test fake, and what layer does coverage
+stop at? Either one explains how a finding survived a green suite.
+
+### Josh's catch: don't hand them the out
+
+The first draft closed with "if #1170 lands, a2acode is fixed without any change here." True,
+disclosed in good faith, and an argument for closing the issue as someone else's problem. We
+have no read on the SDK maintainers' turnaround, so leaning on their fix is betting on an
+unknown.
+
+Rewritten to cross-reference #1170 for the full picture, say plainly that the timeline is
+unknown, keep the double-emit disclosure (redundant, not conflicting), and end on the direct
+assertion: *this is a2acode's terminal state to write, and right now nothing writes it.*
+
+Generalizes past this issue. When a finding overlaps someone else's bug, disclose the overlap
+and don't editorialize it into a reason to defer.
+
+### Filed with one claim untested, and said so
+
+The suggested fix (`await updater.cancel()` before re-raising) is reasoned from the graceful
+close semantics, never run. The issue hedges it explicitly rather than asserting it, and offers
+a PR plus a protocol-level cancel test if the maintainer likes the shape. Josh's call to file
+as-is rather than verify first; the alternative was a rig run to flip the existing strict-xfail
+cancel test, which is still the obvious follow-up if #38 gets traction.
+
+Nothing in the rig changed this session. Suite untouched at 165 passed / 4 xfailed.
