@@ -278,6 +278,13 @@ Fix: rename to `10-refactor.yaml`, `10-upgrade.yaml`, `10-plan-and-apply.yaml`, 
 trailing catch-all into its own `99-default.yaml`. After that, promoting a recording is a `mv`
 into `20-<slug>.yaml`, forever, with the catch-all last by construction.
 
+> **Superseded during implementation (2026-08-08).** The hand-written files landed at `30-*`,
+> not `10-*`, so recordings at `20-*` sort *ahead* of them: an imagined play shadowing a real
+> recording of the same prompt is backwards, and `billing-api`'s broad `contains` plays would
+> have eaten recorded prompts otherwise. The shipped ladder is `20-*` recorded → `30-*`
+> hand-written → `90-*` broad fallbacks → `99-default.yaml`. See DESIGN-v3 §4 and the
+> Phase 7 DEVLOG entry.
+
 ## Testing
 
 The keystone is a **round-trip through playback itself**: `RecordingBackend(PlaybackBackend(repo))`

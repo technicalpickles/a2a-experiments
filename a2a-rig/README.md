@@ -11,7 +11,7 @@ from the real producer, because it *is* the real producer minus the model.**
 
 Planning and design live in the sibling
 [a2a-experiments](https://github.com/technicalpickles/a2a-experiments) repo (`docs/PLAN.md`,
-`docs/DESIGN-v3.md`). This repo is Phases 3 and 4 of that plan.
+`docs/DESIGN-v3.md`). This repo is Phases 3 through 7 of that plan.
 
 ## Running
 
@@ -21,7 +21,7 @@ uv run pytest                      # against a2acode's echo backend
 uv run pytest --backend playback   # against a scripted fake repo
 ```
 
-Expect 108 passed, 4 xfailed, in under seven seconds either way.
+Expect 165 passed, 4 xfailed, in under ten seconds either way.
 
 ### Running the rig
 
@@ -53,8 +53,12 @@ the stream. Which backend runs is a fixture:
 
 ```bash
 uv run pytest --backend echo      # default; no key, no inference
-uv run pytest --backend claude    # real inference, real money
+uv run pytest --backend claude    # real inference
 ```
+
+`--backend claude` spawns the `claude` CLI and inherits whatever it is logged in with, so a
+subscription login is not billed for these runs — what they cost is time and a rate-limit
+slice. `Result.cost_usd` still reports a figure either way.
 
 Per-test override with `@pytest.mark.backend("claude")`.
 
@@ -123,17 +127,81 @@ Recordings sort first: they're real interactions, and an imagined play shadowing
 recording of the same prompt would be backwards. Add a new file at the prefix matching what it
 is, not at whatever number is free.
 
+### Pacing
+
 Set `PLAYBACK_SPEED` to scale `delay_ms` pacing (unset or `0` means instant, the CI default;
 `1.0` is lifelike, `0.1` is a tenth of the scripted pace). `delay_ms` goes on any event, or
 on `defaults:` for the whole scenario, and applies to a `permission` too — a gate that arrives
 the instant you ask reads as a UI bug rather than a script.
 
+## Recording: `rig-record`
+
+Hand-written scenarios rot toward what we *imagine* a Claude run looks like. `rig-record`
+serves a **real** backend through the same server and tees every normalized event into a
+scenario file, one turn at a time:
+
+```bash
+uv run rig-record --backend acp --agent claude \
+  --cwd ~/scratch/demo-app --out ../scratch/rec-health.yaml --port 9300
+```
+
+Then drive it with any A2A client (`a2a-cli`, a browser, the frontend you're building) in
+another terminal. Read the result, scrub whatever the recorder couldn't, and `mv` it into a
+repo's `scenarios/` at the `20-*` prefix.
+
+Things the flags encode:
+
+- **`--backend acp`, not `claude`.** `--backend claude` cannot emit a `plan` event at all
+  against current Claude Code — it keys on a `TodoWrite` tool that no longer exists in the
+  session (`docs/UPSTREAM.md`). A `claude` recording is silently missing plans.
+- **`--out` must be a staging path.** Writing straight into a `scenarios/` directory is
+  refused: an unscrubbed, unreviewed recording landing where the server loads it is how a
+  machine's absolute paths get checked in.
+- **No cost ceiling on the acp path.** `--max-budget-usd` is honored by `--backend claude`
+  only; `ACPBackend` accepts no ceiling, so `rig-record` rejects the flag there rather than
+  pretending. Recording under a subscription login isn't billed, but nothing caps the run.
+- **Use a fresh `--out` per run.** Restarting against an existing file starts from an empty
+  play list and rewrites the whole document — the previous run's turns are gone.
+
+The file is rewritten after **every turn**, not at shutdown, so a ctrl-C keeps what already
+happened. It writes first and validates after, warning on stderr if what came out can't be
+replayed (a gate with nothing after it, say) — a recording that happened belongs on disk even
+when it's unusable, and the alternative is losing a real run over a file already safely saved.
+
+A recording carries **only the branch that was taken**. A live gate gets answered once, so a
+recorded `permission` has `on_allow` or `on_deny`, never both, and reaching the other branch on
+replay raises instead of inventing one. That's why recordings compose with hand-written plays
+rather than replacing them — the deny path, the timeout, and scripted failures stay
+hand-written.
+
+### The refresh loop
+
+The `recorded:` block is what makes re-recording mechanical:
+
+```yaml
+recorded:
+  at: "2026-08-08T17:04:11Z"
+  backend: "acp:claude"
+  a2acode: "0.6.2"
+  prompts: ["add a /health endpoint to ./src/app.py"]
+```
+
+`prompts` is a *source list for re-recording*, not an index into `plays`, so pruning a play
+during scrub doesn't corrupt it. When a2acode or the agent moves: re-record those prompts into
+a fresh `--out`, diff it against the checked-in file, and whatever changed is exactly what
+consumers must newly handle. Timing is deliberately not recorded — wall clock differs every
+run and would make every re-record diff every line. Pacing lives in `repo.yaml`'s
+`defaults.delay_ms` and `PLAYBACK_SPEED` instead.
+
 ## Layout
 
 - `src/a2a_playback/` — the `playback` backend. `scenario.py` parses and matches, `backend.py`
-  emits, `serve.py` is the `rig-serve` wrapper. Written to drop into a2acode's own `backends/`
-  directory later (DESIGN-v3 §7, milestone M4), so it imports only a2acode's public backend
-  vocabulary and holds no rig-specific assumptions.
+  emits, `serve.py` is the `rig-serve` wrapper. `recording.py` is the other direction:
+  `to_scenario_event()` (the inverse of `backend.py`'s `_to_backend_event`) plus the
+  `RecordingBackend` decorator and the session proxy it tees through; `scrub.py` redacts the
+  recording machine's cwd; `record.py` is the `rig-record` wrapper. Written to drop into
+  a2acode's own `backends/` directory later (DESIGN-v3 §7, milestone M4), so it imports only
+  a2acode's public backend vocabulary and holds no rig-specific assumptions.
 - `src/a2a_rig/server.py` — launches a server on a free port, waits for the card, tears down
   after. Surfaces the server's own stderr when it fails to boot, so a broken server is never
   mistaken for a broken test.

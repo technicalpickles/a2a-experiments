@@ -1,8 +1,12 @@
 # A fake billing-api repo that "does" a small feature with a permission gate.
 #
 # Hand-written from the shape of the real Claude run captured in
-# a2a-experiments docs/captures/phase2-claude-run.jsonl. M3 replaces
-# hand-written repos like this one with recordings.
+# a2a-experiments docs/captures/phase2-claude-run.jsonl. M3's recordings
+# compose with plays like these rather than replacing them: a real run
+# answers a permission gate once, so a recording carries on_allow or
+# on_deny and never both. Recordings own the happy paths; hand-written
+# plays cover the deny branch, the abandoned-approval timeout, and
+# scripted failures — the paths a live run cannot be asked to produce.
 card:
   name: billing-api
   description: "Fake billing-api repo (playback)"

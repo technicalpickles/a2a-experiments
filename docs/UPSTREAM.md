@@ -193,6 +193,23 @@ scenario can't model "denied with a redirect" because the real producer can't ex
 **Fix shape:** pass the caller's text through as `PermissionDecision.message`, which already
 exists and is already the obvious home for it.
 
+### `ACPBackend` exposes no cost ceiling
+
+**No task yet** · Small; a nit rather than a bug
+
+`ClaudeBackend` takes `max_budget_usd` and enforces it; `ACPBackend` takes no such argument,
+though the ACP connection tracks `cost_usd` internally — so a ceiling is implementable there,
+it just isn't exposed.
+
+**Why we care specifically:** combined with the `TodoWrite` finding above, the only backend
+that can record a `plan` event is the one with no cost ceiling. `rig-record` therefore rejects
+`--max-budget-usd` on `--backend acp` and says so at startup, rather than accepting a flag it
+cannot honor.
+
+**Fix shape:** plumb `max_budget_usd` through `ACPBackend` the way `ClaudeBackend` already
+does. Possibly deliberate — ACP fronts agents whose cost accounting isn't a2acode's to enforce
+— so lead with the question rather than the patch.
+
 ### M4: offer `playback` and `--record` upstream
 
 **Not a bug — the planned contribution.** DESIGN-v3 §7-8. `a2a_playback` is written to drop
@@ -242,7 +259,9 @@ Noted here so the decision not to file is a decision rather than an oversight.
    the answer decides whether `34c83f8c` is a real bug or expected.
 2. **`5dcde5fb` and `34c83f8c` to a2acode**, once the SDK answer is in hand — and file
    `5dcde5fb` regardless of that answer, since it's worth fixing either way.
-3. **`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes.
+3. **`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes. The
+   `ACPBackend` cost-ceiling nit rides along here — same repo, same size, same "is this
+   deliberate?" shape, and it reads better as a pair than as a lone quibble.
 4. **`cc7feef9` to a2a-cli** any time. The work already exists.
 
 **`70dc7c04` jumps the queue.** It's the only one here that's a plain feature-is-broken report

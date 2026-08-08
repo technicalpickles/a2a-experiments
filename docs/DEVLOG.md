@@ -655,3 +655,166 @@ behavior never had to change to accommodate how repos are organized on disk.
 **Phase 6 (M2) is done.** 3+ fake repos, served through one process behind an index, well
 inside the 5s test budget. The remaining Phase 6 bullet — building a frontend/agents against
 the rig — is its own project from here, not more rig work.
+
+## 2026-08-08 — Phase 7 (M3): the scenario factory
+
+Seven tasks, each reviewed, plus a whole-branch review and one consolidated fix wave. What
+shipped: `to_scenario_event()` (the inverse of `PlaybackBackend._to_backend_event`), the
+`RecordingBackend` decorator, `scrub_cwd()`, the `rig-record` CLI, and a round-trip test that
+records `playback` through a real server, promotes the file, replays it, and compares.
+
+The recording *run* is still outstanding. Everything below is what building the machinery
+turned up.
+
+### The seam is `BackendSession`, not the `Backend` protocol
+
+The obvious place to tee events is the backend — wrap `Backend`, intercept what it returns.
+That does not work, because a2acode's backends don't return events; they're handed a session
+and call `session.emit(...)` and `session.request_permission(...)` against it. The events never
+pass through a value the decorator can see.
+
+So `RecordingBackend` wraps the backend only to get invoked, and the actual recording happens in
+`_RecordingSession`, a proxy substituted for the real session inside `drive()`. It overrides
+exactly two methods, records, and forwards the *original* objects unchanged — same event
+instance, same args, bare re-raise. A recorder that normalizes on the way through would be
+changing what the caller sees, which is the one thing a tee must never do.
+
+The proxy has a documented hole worth knowing about: attribute *assignment* doesn't reach the
+real session. Safe today because a2acode's only session assignment (`session.evicted = True`,
+executor.py:538) happens on the real session outside `drive()`, but it's a property of the
+current upstream rather than of the design.
+
+### Two design contradictions, found by trying to implement them
+
+**DESIGN-v3 §6 wanted "every normalized event (plus timing)" *and* a refresh loop that diffs
+normalized streams.** Those fight. Wall-clock timing differs on every run, so recording it
+would make every re-record diff every line, and the diff is the entire point of the refresh
+loop — it's supposed to tell you what upstream changed. Timing lost. Pacing already had a home
+in `repo.yaml`'s `defaults.delay_ms` and `PLAYBACK_SPEED`, which is a better one anyway: it's
+authored intent rather than an accident of how busy the machine was.
+
+**PLAN.md Phase 7 said recordings would replace hand-written scenarios.** They can't. A real
+run answers a permission gate *once*, so a recorded `permission` carries `on_allow` or
+`on_deny` and never both. The deny branch, the abandoned-approval timeout, and scripted
+mid-stream failures are precisely the things a live run cannot be asked to produce — they're
+why the hand-written scenarios exist. Recordings own the happy paths and the two compose.
+"Replacing" would have traded real coverage for provenance.
+
+Both documents are corrected. Neither error was visible by reading; both surfaced as "wait,
+what do I write here?"
+
+### The silent branch, and why it had to be fixed first
+
+Recording only-the-taken-branch makes the unscripted branch a *common* state rather than a
+scripting mistake — so the first task was making it loud. It wasn't: reaching a permission
+branch a play didn't script emitted nothing and ended the turn with no `result`. A frontend
+would see a task that just... stopped. That's exactly the plausible-wrong-answer this rig's
+design refuses everywhere else, sitting in the code the whole time. Now it raises at runtime,
+and a gate with no branches at all is refused at load.
+
+### The ordering trap, three times in one milestone
+
+`Match.matches` only checks the fields that are *set*. So a play with a bare `turn: 1` and no
+`contains`/`regex` matches **any** first-turn prompt — it's a catch-all wearing a constraint.
+And `_reject_shadowed_plays` only polices a literal `match: {}`.
+
+That bit three times:
+
+1. `billing-api`'s greeting play (`match: { turn: 1 }`) lived in the file that sorted first. A
+   promoted `20-recorded-*.yaml` sorts after it, so a recorded first-turn prompt — the most
+   common shape a capture takes — would never reach its own play. It would answer "Ready when
+   you are." No error. That would have surfaced *after* the recording run.
+2. Then the same class one layer over: recorded plays sorted *behind* `billing-api`'s
+   hand-written `contains: "run the tests"` and `contains: "explain"` plays. The spec's own
+   runbook asks for a prompt that hits a permission gate, and the round-trip test's phrasing is
+   "add a /health endpoint and run the tests" — a direct collision.
+3. And the guard that would have caught it can't be written the obvious way. "A play with no
+   `contains`/`regex` must be last" would reject `90-greeting.yaml`, which is legitimately
+   broad and legitimately not last.
+
+The resolution was a naming ladder rather than a validator: `20-*` recorded, `30-*`
+hand-written specifics, `90-*` broad fallbacks, `99-default.yaml` catch-all. Recordings sort
+**first**, which is the substantive call — an imagined play shadowing a real recording of the
+same prompt is backwards. What makes that safe in both directions is that each side already has
+a detector: a new `recorded.prompts` self-check re-selects every recorded prompt at load and
+catches a recording being shadowed, and `conftest.py`'s `permission_prompt`/`denied_marker`
+fixtures depend on `billing-api`'s hand-written gate, so a recording that ate that prompt turns
+the existing suite red.
+
+The general validator is still unwritten and is an M4 design question: what does "over-broad"
+mean, when a broad play sorting early is sometimes exactly right?
+
+A related discovery, unfixed: `conftest.py`'s `reply_marker` asserts "Ready when you are",
+which *both* the greeting play and the catch-all contain. That's why renaming and splitting the
+scenario files tripped no failure — the fixture can't tell which play answered it. A fixture
+that passes against two different plays cannot detect a play-ordering regression.
+
+### What the round-trip test turned up
+
+Mostly: no serializer disagreement. `to_scenario_event` and `_to_backend_event` agree across
+the full gated-play vocabulary, including `plan`, `file_change`, and nested branch events, and
+the strengthened assertions passed against the code as built rather than forcing changes.
+
+The interesting failures were in the *test*, and they're the kind that pass while proving
+nothing:
+
+- The replay-side `serve()` calls omitted `backend="playback"`, and `serve()` defaults to echo.
+  The keystone test would have been green while replaying the promoted repo through a2acode's
+  real echo backend.
+- `assert "on_allow" in permission` passes for an *empty* branch — exactly the unreplayable
+  recording that `write()` warns about.
+- Asserting on the failure *message* proves nothing, because executor.py collapses every
+  backend exception to the same "Claude Code run failed; see server logs." The useful assertion
+  is that the replay parks in `input_required` first.
+
+### Durability, and what "don't lose the run" actually means
+
+`write()` rewrites the whole file after **every turn**, not at shutdown, so a ctrl-C keeps what
+already happened. Three rulings fell out of that:
+
+- **Write first, validate after, warn on stderr.** Not raise — that would kill a live session
+  over a file already safely on disk. Not drop the offending node to force a clean load — the
+  gate happened, and deleting it fabricates a run that didn't occur. A recording that can't
+  replay is a worse outcome than a clean file only if you'd rather have nothing.
+- **`except BaseException`, not `except Exception`**, so a cancel doesn't drop the in-flight
+  turn. This one had a trap the reviewer caught: fixing it *alone* makes things worse, because
+  `str(CancelledError())` is `""` and `scenario.py` rejects an empty error message — turning a
+  lost turn into a corrupt file. The empty-message guard had to land first.
+- **Atomic replace**, since a non-atomic whole-file rewrite can truncate and lose every prior
+  turn, which is the exact outcome writing-every-turn exists to prevent.
+
+Still open, deliberately: restarting `rig-record` against an existing `--out` starts from an
+empty play list and silently rewrites the file. Use a fresh `--out` per run. It's documented in
+the README rather than guarded in code.
+
+### The run doesn't cost money
+
+I framed the recording run as "the paid run" throughout this milestone and was wrong about it.
+The `claude` and `acp` backends spawn the `claude` CLI and inherit its subscription login;
+`Result.cost_usd` *reports* a figure (0.30 and 0.24 on the Phase 2 turns) without billing it.
+What the run costs is time and a rate-limit slice.
+
+The related upstream nit is real, though, and is now in `docs/UPSTREAM.md`: `ACPBackend` takes
+no `max_budget_usd` at all, while `ClaudeBackend` does. Combined with the `TodoWrite` finding,
+the only backend that can record a `plan` is the one with no cost ceiling. `rig-record` rejects
+`--max-budget-usd` on the acp path rather than accepting a flag it can't honor.
+
+### Verification
+
+```
+uv run pytest --backend playback   →  165 passed, 4 xfailed, 7.86s
+uv run pytest --backend echo       →  165 passed, 4 xfailed, 8.66s
+```
+
+(Baseline going into Phase 7 was 108 passed, 4 xfailed.) The backend-agnostic suite needed zero
+edits across all seven tasks — fourth consecutive milestone. That constraint is the standing
+signal that changes are landing in the right layer; the day it needs edits is the day to stop
+and reassess rather than edit it.
+
+### Outcome
+
+M3's machinery is done and merged. Phase 7 is not closed: the recording run itself is still
+outstanding, and it has to be `--backend acp` (the claude backend can't emit plans), driven by
+hand with a client in a second terminal, hitting at least one real permission gate and
+approving it so a recorded `on_allow` exists. Avoid prompts containing "run the tests" or
+"explain" — those belong to `billing-api`'s hand-written plays.

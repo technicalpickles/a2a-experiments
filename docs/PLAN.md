@@ -213,11 +213,23 @@ is the consumer, which is its own project.
 
 ## Phase 7 — M3: the scenario factory *(recording runs on your machine)*
 
-- [ ] `RecordingBackend` decorator + `--record out.yaml` on the serve wrapper.
-- [ ] Re-run the Phase 2 prompts once, budget-capped, through `--record`; scrub; check in
-      ≥3 recorded scenarios replacing hand-written ones.
-- [ ] Document the refresh loop: upstream bump → re-record → diff normalized streams →
-      update scenarios/frontend.
+- [x] `RecordingBackend` decorator + `--record out.yaml` on the serve wrapper. *(Shipped as
+      `RecordingBackend` plus the standalone `rig-record` CLI rather than a flag on
+      `rig-serve`; `serve(..., record_out=)` is the shared seam.)*
+- [ ] Re-run the Phase 2 prompts once through `--record`; scrub; check in ≥3 recorded
+      scenarios **composing with** the hand-written ones. *(The original wording said
+      "replacing hand-written ones," which is wrong: a real run answers a permission gate
+      once, so a recording carries `on_allow` or `on_deny` and never both. Recordings own the
+      happy paths; the hand-written scenarios stay for the deny branch, the abandoned-approval
+      timeout, and scripted failures, which a live run cannot be made to produce on demand.
+      "Replacing" would have traded real coverage for provenance. Also dropped "budget-capped":
+      `--max-budget-usd` is honored by `--backend claude` only, and the run has to be `acp`
+      because the claude backend can no longer emit a `plan` — so the acp path has no ceiling.)*
+- [x] Document the refresh loop: upstream bump → re-record → diff normalized streams →
+      update scenarios/frontend. *(Mechanics only, in `a2a-rig/README.md`. The `recorded:`
+      block carries `at`/`backend`/`a2acode`/`prompts` so a re-record has its own inputs; what
+      a diff actually looks like gets written from evidence at the first real upstream bump,
+      not invented now.)*
 
 **Exit:** the scenario library's backbone is recorded, not imagined.
 
@@ -235,7 +247,10 @@ is the consumer, which is its own project.
 
 - Phases 0→1→2 are strictly ordered (each attributes failures for the next). Phase 3 can
   start in parallel with Phase 2 — it only needs echo.
-- The only inference spend in the whole plan: Phase 2 (~$1) and Phase 7's recording session.
+- The only inference in the whole plan: Phase 2 and Phase 7's recording session. Neither is
+  billed — both backends inherit the `claude` CLI's subscription login, and `Result.cost_usd`
+  *reports* a figure (0.30/0.24 on the Phase 2 turns) without charging it. What they cost is
+  time and a rate-limit slice, and Phase 7's acp path has no enforceable ceiling.
 - Phases 0, 1, 3, 4, 5, 6, 8 are sandbox/CI-friendly: no credentials, no trust decisions —
   good candidates to delegate or run in the background.
 - Kill criteria worth honoring: if Phase 1 reveals a2acode's surface is wrong for your

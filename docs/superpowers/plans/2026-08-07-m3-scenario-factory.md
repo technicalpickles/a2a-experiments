@@ -1322,6 +1322,12 @@ This task adds a test file and nothing else. If you found yourself changing `con
 
 Make promotion a `mv`. Every shipped repo's scenario file ends with a `match: {}` catch-all, so any second file sorting after it makes the recorded plays unreachable and fails the repo at boot.
 
+> **Superseded during implementation (2026-08-08).** Every `10-*` filename in this task shipped
+> as `30-*`, and `billing-api`'s `turn: 1` greeting was lifted into `90-greeting.yaml`.
+> Recordings sort *ahead* of hand-written plays, not behind them. Do not run this task's
+> `git mv` commands as written. Shipped ladder: `20-*` recorded → `30-*` hand-written specifics
+> → `90-*` broad fallbacks → `99-default.yaml`. See DESIGN-v3 §4 and the Phase 7 DEVLOG entry.
+
 **Files:**
 - Rename: `a2a-rig/repos/billing-api/scenarios/refactor.yaml` → `10-refactor.yaml`
 - Rename: `a2a-rig/repos/checkout-web/scenarios/upgrade.yaml` → `10-upgrade.yaml`
@@ -1488,7 +1494,7 @@ mv scratch/recording-health.yaml a2a-rig/repos/billing-api/scenarios/20-recorded
 cd a2a-rig && uv run pytest --backend playback && uv run pytest --backend echo
 ```
 
-Expected: both green. A boot failure here means a match collision with `10-refactor.yaml` — adjust the recorded regex, do not touch the hand-written file.
+Expected: both green. A boot failure here means a match collision with `30-refactor.yaml` (renamed from `10-refactor.yaml` during implementation) — adjust the recorded regex, do not touch the hand-written file. A *green* run with red permission tests means the opposite problem: the recording ate a prompt `conftest.py`'s `permission_prompt`/`denied_marker` fixtures depend on, so avoid prompts containing "run the tests" or "explain".
 
 - [ ] **Step 6: Commit**
 

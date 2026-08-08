@@ -94,7 +94,7 @@ defaults:
 ```
 
 ```yaml
-# repos/billing-api/scenarios/refactor.yaml — a repo that "does" a refactor with a permission gate
+# repos/billing-api/scenarios/30-refactor.yaml — a repo that "does" a refactor with a permission gate
 plays:
   - match: { turn: 1 }                    # first message in any context
     events:
@@ -129,6 +129,35 @@ plays:
       - result: { cost_usd: 0.001, num_turns: 1 }
 ```
 
+A recorded file is the same format plus provenance. `rig-record` writes a `recorded:` mapping
+alongside `plays:`, carrying `at`, `backend` (the label, e.g. `acp:claude`), `a2acode` (the
+producer version this describes), and `prompts`:
+
+```yaml
+# a scrubbed rig-record capture, promoted to scenarios/20-recorded-health.yaml
+recorded:
+  at: "2026-08-08T17:04:11Z"
+  backend: "acp:claude"
+  a2acode: "0.6.2"
+  prompts:
+    - "add a /health endpoint to ./src/app.py"
+plays:
+  - match: { regex: "^add a /health endpoint to \\./src/app\\.py$" }
+    events: [ ... ]
+```
+
+`prompts` is machine-readable because the refresh loop consumes it — "re-record the library's
+source prompts" needs the prompts back. It is a *source list for re-recording*, not an index
+into `plays`, so pruning a play during scrub does not corrupt it. Recorded plays match on an
+anchored, `re.escape`d regex, which is what stops two recordings in one repo from shadowing
+each other.
+
+Scenario files are named `NN-<slug>.yaml`, and because files load in filename order the prefix
+is the promotion ladder: `20-*` recorded, `30-*` hand-written specifics, `90-*` broad
+fallbacks, and the catch-all alone in `99-default.yaml`. Recordings sort *ahead* of
+hand-written plays — an imagined play shadowing a real recording of the same prompt is
+backwards.
+
 Semantics worth pinning:
 
 - **Match rules** (first match wins): `turn: N` (nth task in the context — exercises
@@ -160,12 +189,25 @@ should handle them. None of that is simulated by this project — it's the real 
 
 Hand-written scenarios rot toward what we *imagine* Claude runs look like. The fix is a
 **recording mode**: a `RecordingBackend` decorator that wraps any real backend (`acp` or
-`claude`), tees every normalized event (plus timing) to a file, and emits it unchanged. One
+`claude`), tees every normalized event to a file, and emits it unchanged. One
 flag: `a2acode serve --backend claude --record captures/refactor.yaml`. Then: run a real
 prompt once, scrub, check the file in as a scenario.
 
-- **Determinism of the recording source is optional.** For scenario capture, a live run with
-  `--max-budget-usd` is fine — recording captures *shape*, it doesn't assert. For
+- **A recording captures only the branch that was taken.** A real run answers a permission
+  gate once, so a recorded `permission` carries `on_allow` or `on_deny`, never both, and the
+  other branch is a loud failure on replay rather than an invented one. This is why recorded
+  and hand-written scenarios compose rather than one replacing the other: the deny path, the
+  abandoned-approval timeout, and scripted failures are exactly what a live run cannot be made
+  to produce on demand.
+- **No per-event timing.** The refresh loop works by diffing normalized streams across
+  re-recordings, and wall-clock timing differs every run — recording it would make every
+  re-record diff every line. Pacing stays where it already lives: `repo.yaml`'s
+  `defaults.delay_ms` and `PLAYBACK_SPEED`.
+- **Determinism of the recording source is optional.** For scenario capture, a live run is
+  fine — recording captures *shape*, it doesn't assert. Note that the cost ceiling only exists
+  on one path: `--max-budget-usd` is honored by the `claude` backend and `ACPBackend` takes no
+  ceiling at all. Since `--backend claude` can no longer emit a `plan` at all (`docs/UPSTREAM.md`),
+  the only backend that records the full vocabulary is the one that cannot be capped. For
   reproducible re-recording, a fake Anthropic API under the real `claude` binary works
   (contract and plan in DESIGN-v2 §5).
 - **Refresh loop = provider verification.** When upstream moves (new SDK event types,
