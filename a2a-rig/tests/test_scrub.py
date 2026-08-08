@@ -48,3 +48,20 @@ def test_the_input_is_not_mutated():
     play = {"tool_use": {"input": {"file_path": f"{CWD}/a.py"}}}
     scrub_cwd(play, CWD)
     assert play["tool_use"]["input"]["file_path"] == f"{CWD}/a.py"
+
+
+def test_a_sibling_directory_is_not_corrupted():
+    """The cwd is a prefix of unrelated sibling paths. Replacing it blind
+    turns /scratch/demo-app-old into ./-old."""
+    play = {"tool_result": {"id": "t1", "output": f"{CWD}-old/notes.txt"}}
+    assert scrub_cwd(play, CWD)["tool_result"]["output"] == f"{CWD}-old/notes.txt"
+
+
+def test_a_dotted_sibling_is_not_corrupted():
+    play = {"tool_result": {"id": "t1", "output": f"{CWD}.bak/app.py"}}
+    assert scrub_cwd(play, CWD)["tool_result"]["output"] == f"{CWD}.bak/app.py"
+
+
+def test_the_cwd_at_the_end_of_a_string_is_still_scrubbed():
+    play = {"tool_result": {"id": "t1", "output": f"ran in {CWD}"}}
+    assert scrub_cwd(play, CWD)["tool_result"]["output"] == "ran in ."

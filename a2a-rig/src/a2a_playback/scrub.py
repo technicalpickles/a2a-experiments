@@ -13,6 +13,7 @@ benefit.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -35,13 +36,17 @@ def scrub_cwd(value: Any, cwd: str) -> Any:
     Walks dicts, lists, and strings; leaves numbers, booleans, and None alone,
     so cost_usd/usage/num_turns come through untouched. Returns new objects
     rather than mutating, because the caller still holds the live events.
+
+    Uses a negative lookahead to avoid corrupting sibling paths: the cwd is
+    only replaced when NOT followed by a path-segment character ([A-Za-z0-9._-]).
+    This prevents `/Users/x/demo-app-old` from becoming `./-old`.
     """
     forms = _forms(cwd)
 
     def walk(node: Any) -> Any:
         if isinstance(node, str):
             for form in forms:
-                node = node.replace(form, ".")
+                node = re.sub(re.escape(form) + r"(?![A-Za-z0-9._-])", ".", node)
             return node
         if isinstance(node, dict):
             return {k: walk(v) for k, v in node.items()}
