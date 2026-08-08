@@ -3,8 +3,9 @@ plays:
   # with no `contains`/`regex` constraint, so it answers *any* first message.
   # A file sorting after this one would have every turn-1 play shadowed by
   # it, so it lives just above 99-default.yaml, not up with the specific
-  # plays in 10-refactor.yaml — that leaves room for 20-*.yaml (e.g. a
-  # promoted recording) to win on turn 1 before this catches it.
+  # plays in 30-refactor.yaml — that leaves room for 20-*.yaml (a promoted
+  # recording) and 30-*.yaml (hand-written specifics) to both win on turn 1
+  # before this catches it.
   #
   # First message of any conversation that is not one of the above.
   - match: { turn: 1 }

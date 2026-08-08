@@ -245,10 +245,9 @@ def _validate_event(event: Any, play_index: int, where: str) -> None:
             )
         if not any(body.get(b) for b in ("on_allow", "on_deny", "on_timeout")):
             raise ScenarioError(
-                f"{where}: play #{play_index} `permission` has at least one branch "
-                f"missing — it needs at least one of `on_allow`, `on_deny`, or "
-                f"`on_timeout`. A gate that does nothing on every answer cannot be "
-                f"what was meant"
+                f"{where}: play #{play_index} `permission` has no branches — it "
+                f"needs at least one branch: `on_allow`, `on_deny`, or `on_timeout`. "
+                f"A gate that does nothing on every answer cannot be what was meant"
             )
         for branch in ("on_allow", "on_deny", "on_timeout"):
             for nested in body.get(branch) or []:

@@ -7,12 +7,19 @@ agent run can be captured and later replayed byte-for-byte through
 ``playback``. The two live in different files and will rot apart over time —
 ``tests/test_recording.py``'s round-trip tests are what holds them together.
 
-Only the serializer lives here. The tee that wraps a real backend and calls
-it during a live run (``RecordingBackend``) is a later task.
+Both halves live here now: the serializer (``to_scenario_event``) and the tee
+that wraps a real backend and calls it during a live run
+(``RecordingBackend``).
+
+Upstreaming this module to a2acode would go alongside the playback backend,
+not on its own: it imports ``parse_scenario``/``ScenarioError`` from
+``.scenario`` and ``scrub_cwd`` from ``.scrub``, and what it writes is the
+playback format.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -163,7 +170,7 @@ class RecordingBackend:
         proxy = _RecordingSession(session, events)
         try:
             await self._inner.drive(proxy, request)
-        except Exception as exc:
+        except BaseException as exc:
             # A real failure recorded is exactly the coverage recording
             # otherwise cannot manufacture. Keep it, then let a2acode's real
             # failure path run untouched. Appended through the proxy's own
@@ -171,7 +178,17 @@ class RecordingBackend:
             # gate was answered, the cursor has already moved into the branch
             # taken, and an error left at the root would be as unreachable on
             # replay as any other post-gate event left there.
-            proxy._current.append({"error": str(exc)})
+            #
+            # `BaseException`, not `Exception`: `BackendSession.start`
+            # re-raises `asyncio.CancelledError` before its `BaseException`
+            # relay, so uvicorn shutdown, session eviction, or a client
+            # disconnect must still land the in-flight turn's recording.
+            # `str(exc) or type(exc).__name__`: `str(RuntimeError())`,
+            # `str(asyncio.TimeoutError())`, and `str(CancelledError())` are
+            # all `""`, and scenario.py rejects an `error` event with an
+            # empty message — an empty-message failure would write a
+            # recording that cannot load.
+            proxy._current.append({"error": str(exc) or type(exc).__name__})
             self._finish(request.prompt, events)
             raise
         self._finish(request.prompt, events)
@@ -182,6 +199,18 @@ class RecordingBackend:
         # neither leaks the recording machine's absolute paths, and the
         # anchored regex still matches when replayed somewhere else.
         prompt = scrub_cwd(prompt, self._cwd)
+        if prompt in self._prompts:
+            # Not fatal — a repeated prompt is legitimate to record, it is
+            # only the second copy's regex that is dead weight. Anchored
+            # regexes are identical for identical prompts, so first match
+            # wins means the second play this turn writes can never be
+            # reached on replay; the operator should know that happened.
+            print(
+                f"warning: {self._out} already has a recorded play for the "
+                f"prompt {prompt!r}; the new one is unreachable on replay "
+                f"(first match wins)",
+                file=sys.stderr,
+            )
         self._prompts.append(prompt)
         self._plays.append({
             "match": {"regex": f"^{re.escape(prompt)}$"},
@@ -214,12 +243,20 @@ class RecordingBackend:
         already safely written — and never edits the document to make it
         pass: dropping the offending permission would be inventing a run
         that never occurred.
+
+        The write itself is atomic: a sibling `.tmp` path, then `os.replace`
+        onto the target. `Path.write_text` is truncate-then-write, so a
+        SIGINT or a full disk between those two steps would lose every prior
+        turn already on disk — exactly the outcome writing every turn exists
+        to prevent.
         """
         self._out.parent.mkdir(parents=True, exist_ok=True)
         document = self.document()
-        self._out.write_text(
+        tmp = self._out.with_name(self._out.name + ".tmp")
+        tmp.write_text(
             yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
         )
+        os.replace(tmp, self._out)
         try:
             parse_scenario(document, path=self._out)
         except ScenarioError as exc:

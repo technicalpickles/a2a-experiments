@@ -192,6 +192,54 @@ async def test_a_raising_turn_records_an_error_and_still_fails(tmp_path):
     assert events == [{"text": "partial\n"}, {"error": "the model fell over"}]
 
 
+async def test_a_raising_turn_with_an_empty_message_still_writes_a_loadable_file(tmp_path):
+    """`str(RuntimeError())`, `str(asyncio.TimeoutError())`, and
+    `str(asyncio.CancelledError())` are all `""`, and scenario.py rejects an
+    `error` event with an empty message. Falling back to the exception's type
+    name is what keeps a plausible real failure (a bare timeout, a dropped
+    connection) from writing a recording that cannot load."""
+    async def body(session, request):
+        await session.emit(TextDelta(text="partial\n"))
+        raise RuntimeError()
+
+    out = tmp_path / "r.yaml"
+    backend = RecordingBackend(_Scripted(body), out=out, cwd=str(tmp_path))
+    session = BackendSession()
+    session.start(lambda s: backend.drive(s, RunRequest(prompt="go", context_id="c1")))
+    with pytest.raises(RuntimeError):
+        [e async for e in session.drain()]
+
+    events = backend.document()["plays"][0]["events"]
+    assert events == [{"text": "partial\n"}, {"error": "RuntimeError"}]
+
+    scenario = load_scenario(out)  # must not raise: the file loads
+    assert scenario.plays[0].events[-1] == {"error": "RuntimeError"}
+
+
+async def test_a_cancelled_turn_still_records(tmp_path):
+    """`BackendSession.start`'s own runner re-raises `asyncio.CancelledError`
+    without relaying it through the session's error queue — a bare
+    `except Exception` in `drive` would never see it at all, so
+    `RecordingBackend` would silently drop the recording of an in-flight
+    turn on uvicorn shutdown, session eviction, or a client disconnect.
+    Calling `drive` directly (rather than through `session.start`/`drain`,
+    which have their own cancellation semantics) isolates what
+    `RecordingBackend` itself is responsible for: recording before it lets
+    the exception through unchanged."""
+    async def body(session, request):
+        await session.emit(TextDelta(text="partial\n"))
+        raise asyncio.CancelledError()
+
+    out = tmp_path / "r.yaml"
+    backend = RecordingBackend(_Scripted(body), out=out, cwd=str(tmp_path))
+    session = BackendSession()
+    with pytest.raises(asyncio.CancelledError):
+        await backend.drive(session, RunRequest(prompt="go", context_id="c1"))
+
+    events = backend.document()["plays"][0]["events"]
+    assert events == [{"text": "partial\n"}, {"error": "CancelledError"}]
+
+
 async def test_the_file_is_written_after_every_turn(tmp_path):
     """Real money was just spent; a ctrl-C should not cost the recording."""
     async def body(session, request):
@@ -299,6 +347,26 @@ async def test_the_prompt_is_scrubbed_in_both_match_and_provenance(tmp_path):
     assert str(tmp_path) not in doc["plays"][0]["match"]["regex"]
     import re
     assert doc["plays"][0]["match"]["regex"] == f"^{re.escape(expected)}$"
+
+
+async def test_a_repeated_prompt_warns_but_does_not_raise(tmp_path, capsys):
+    """Two turns with the same prompt produce identical anchored regexes, so
+    the second is unreachable on replay — legitimate to record, but the
+    operator should be told, not left to find out by re-recording."""
+    async def body(session, request):
+        await session.emit(Result(num_turns=1))
+
+    out = tmp_path / "r.yaml"
+    backend = RecordingBackend(_Scripted(body), out=out, cwd=str(tmp_path))
+
+    await _drive_once(backend, "do the thing", context_id="c1")
+    assert "already has a recorded play" not in capsys.readouterr().err
+
+    await _drive_once(backend, "do the thing", context_id="c2")
+    captured = capsys.readouterr()
+    assert "already has a recorded play" in captured.err
+    assert "do the thing" in captured.err
+    assert len(backend.document()["plays"]) == 2  # written anyway, not dropped
 
 
 async def test_a_second_gate_nests_inside_the_first_branch_taken(tmp_path):

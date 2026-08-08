@@ -24,10 +24,8 @@ from a2acode.server import build_app
 
 from .backend import PlaybackBackend
 from .recording import RecordingBackend
-from .repo import RepoError, load_repo
+from .repo import SCENARIOS_DIR, RepoError, load_repo
 from .scenario import ScenarioError
-
-SCENARIOS_DIR = "scenarios"
 
 
 def build_recording_backend(args) -> RecordingBackend:
@@ -114,6 +112,15 @@ def main(argv: list[str] | None = None) -> int:
     _check_out(args.out, parser)
     if args.backend == "playback" and not args.repo:
         parser.error("--backend playback needs a --repo to play")
+    if args.max_budget_usd is not None and args.backend != "claude":
+        # ACPBackend (and anything else make_backend() hands back) takes no
+        # budget kwarg at all — passing --max-budget-usd would silently do
+        # nothing, and the operator would find out only after the run
+        # already spent without limit.
+        parser.error(
+            f"--max-budget-usd is only honored by --backend claude; "
+            f"--backend {args.backend} has no cost ceiling to set"
+        )
 
     url = f"http://{args.host}:{args.port}/"
     try:
@@ -128,6 +135,17 @@ def main(argv: list[str] | None = None) -> int:
 
     app = build_app(backend, url=url)
     print(f"rig-record: backend={args.backend} out={args.out} card={url}", flush=True)
+    if args.backend not in ("claude", "playback"):
+        # The only backend with a cost ceiling is `claude` (`--max-budget-usd`
+        # above); `playback` spends nothing at all, so it needs no warning.
+        # Everything else — `acp` foremost, since that's what the paid run
+        # uses — starts fine and spends without limit.
+        label = getattr(backend, "_provenance", {}).get("backend", args.backend)
+        print(
+            f"rig-record: backend={label} — no cost ceiling on this backend; "
+            f"watch cost_usd in each result",
+            flush=True,
+        )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     return 0
 
