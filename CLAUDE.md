@@ -55,6 +55,14 @@ Each document has one job — don't blend them:
   and are historical once it ships — the architectural decisions in them graduate into
   DESIGN-v3, which stays the plan of record. Don't edit a shipped spec to reflect what
   changed; note it in DEVLOG and update DESIGN-v3.
+- **`docs/superpowers/plans/YYYY-MM-DD-*.md`** are the per-milestone execution plans the specs
+  feed. Same rule: historical once shipped, corrections go to DEVLOG and DESIGN-v3. **One
+  exception** — a plan holds runnable commands (`git mv`, `mv`, pytest invocations), and a
+  historical document that hands you a wrong command is a worse hazard than one with stale
+  prose. So add a blockquoted `> **Superseded during implementation (DATE).**` note at the top
+  of any task whose commands no longer apply, saying what actually shipped and pointing at
+  DESIGN-v3 and the DEVLOG entry. Don't rewrite the task body. If the task is still
+  *unexecuted*, correct its commands in place instead — someone is going to run them.
 - **`docs/pass-{1..4}-*.md`** are dated research snapshots (A2A protocol/SDKs, ecosystem
   tooling, Claude Agent SDK, deterministic-backend approaches) that fed the designs. Treat them
   as historical inputs, not living docs — if something in a pass doc turns out stale, the fix
@@ -62,6 +70,12 @@ Each document has one job — don't blend them:
 
 When picking up work in this repo: read `docs/PLAN.md` first for current status, `docs/DEVLOG.md`
 for recent context/decisions, and `docs/DESIGN-v3.md` for the target architecture.
+
+**Docs-only commits go straight to `main`.** That's how the specs and plans themselves landed
+(`fa8d414`, `c98f2b5`, `3c9a660`), and a branch that exists for one commit and an immediate
+fast-forward buys nothing. This overrides the general branch-first-on-the-default-branch
+habit — for docs only. Code changes under `a2a-rig/` still branch, because that's where review
+actually happens.
 
 ## Where the rest of the code lives (not in this repo)
 
