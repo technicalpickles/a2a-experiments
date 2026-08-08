@@ -258,9 +258,16 @@ def test_a_shipped_repo_accepts_a_new_scenario_file_without_reordering(repo_name
     load_repo(home)
 
 
-def test_a_new_scenario_file_drops_in_without_shadowing(tmp_path):
+@pytest.mark.parametrize("turn", [1, 2])
+def test_a_new_scenario_file_drops_in_without_shadowing(tmp_path, turn):
     """The point of the prefixes: a recorded file lands between the
-    hand-written plays and the catch-all, and everything stays reachable."""
+    hand-written plays and the catch-all, and everything stays reachable —
+    including on turn 1, the shape a real `--record` capture most commonly
+    takes. That only holds because billing-api's broad `turn: 1` greeting
+    play was moved out of 10-refactor.yaml into 90-greeting.yaml, which
+    sorts after a promoted 20-*.yaml file; before that move this test's
+    turn=1 case failed for an unrelated reason (the greeting, not the
+    catch-all, shadowed it)."""
     import shutil
     from pathlib import Path
 
@@ -275,9 +282,5 @@ def test_a_new_scenario_file_drops_in_without_shadowing(tmp_path):
     )
 
     repo = load_repo(home)  # must not raise: the catch-all is still last
-    # turn=2, not 1: billing-api's own `match: { turn: 1 }` play (10-refactor.yaml)
-    # matches any turn-1 prompt regardless of content, which would shadow this
-    # for an unrelated reason. turn=2 isolates what this test is actually
-    # checking — that the new file isn't shadowed by the catch-all.
-    play = repo.select("a recorded prompt", turn=2)
-    assert play.events[0] == {"text": "from a recording"}, "the catch-all shadowed it"
+    play = repo.select("a recorded prompt", turn=turn)
+    assert play.events[0] == {"text": "from a recording"}, "shadowed by an earlier-sorting play"

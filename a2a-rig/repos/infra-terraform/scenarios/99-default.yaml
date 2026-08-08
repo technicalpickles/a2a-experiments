@@ -1,3 +1,7 @@
+# The catch-all lives alone so a new scenario file can be dropped in without
+# reordering anything. Files load in filename order and their plays
+# concatenate, so a catch-all sharing a file with real plays shadows every
+# file that sorts after it.
 plays:
   # A run that dies partway, as the default: a consumer gets a failing repo
   # without having to know a magic phrase.
