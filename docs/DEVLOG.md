@@ -1483,4 +1483,33 @@ an issue; sometimes it's a better-informed no.
 Cleanup: killed a stray `rig-serve` on 9310 left running from a prior session, plus an echo
 server on 9317 that survived a first `kill` and needed `-9`, and removed the temp worktree.
 
-Rig untouched. Suite still 165 passed / 4 xfailed. Taskwarrior at 15 pending.
+### Convention change: no agent trailers on outbound commits
+
+The 2026-08-08 call was "strip `Claude-Session` from commits to someone else's repo,
+`Co-Authored-By` stays." Reviewing the a2a-cli migration commit, which had neither, Josh
+reversed it: **commits going into someone else's repo carry no agent trailers at all.** His own
+repos keep both. Already-pushed commits that predate this stay as they are; not force-pushing a
+branch over a trailer. Saved as its own memory since it applies well beyond this project.
+
+### What five filings and four re-derivations actually taught
+
+Worth collecting, because it's spread across the last four entries and the pattern is the
+transferable part:
+
+- **Re-derivation changes severity and scope, not just facts.** `f010f63e` went nit → bug,
+  `438d9c1c` went nit → feature request, in the same pass, in opposite directions. Ordering
+  built on the old sizes was wrong too.
+- **A wrong claim is often sitting on top of the right framing.** `5dcde5fb`'s dead "disconnected
+  client" premise hid the much stronger "the only case that reaches this branch is the one it
+  handles wrong." `e653db90`'s invalid inference hid a whole streaming-protocol misread.
+- **When the claim is about what someone else sent you, only the wire answers it.** Reading your
+  own source proves what you did with data, never what arrived. `e653db90` was unfileable until
+  thirty lines of `tee`.
+- **Bundling test: does it bury the item with evidence?** Split `f010f63e` from `438d9c1c` on
+  that, same as `e653db90` earlier.
+- **Sometimes the output is a better-informed no.** a2a-cli, this entry.
+- **The generous framing that lands is accurate description, not announced charity.** #40 shipped
+  a section headed "Why I don't think this is a careless bug" and had to be edited after filing.
+
+Rig untouched. Suite still 165 passed / 4 xfailed. Taskwarrior at 15 pending. Five issues out,
+five docs commits unpushed.
