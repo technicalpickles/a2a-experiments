@@ -18,16 +18,20 @@ same way `a2a-rig/` does, extractable later by the same mechanism.
 
 ```
 Project  (a grouping: which repos, and every chat about them)
-└── Orchestrator chat  (one conversation with the orchestrator agent; live or replay)
-    └── Repo session   (an A2A conversation the orchestrator opens with one repo agent)
+├── Orchestrator chat  (a conversation with the orchestrator agent; live or replay)
+│   └── Repo session   (an A2A conversation the orchestrator opens with one repo agent)
+└── Direct chat        (a conversation held straight with one repo agent — it IS a repo session)
 ```
 
 - **Project** — a named set of repos drawn from the rig's index, plus the chats accumulated
   against them. Defined declaratively in `projects.yaml` (config-on-disk, consistent with
   the rig's directory-is-identity philosophy), not created in the UI:
   `demo-shop: [billing-api, checkout-web, infra-terraform]`.
-- **Orchestrator chat** — one conversation with the orchestrator agent, multi-turn. A live
-  chat has a real Claude Agent SDK session behind it; a replay chat has a recorded trace.
+- **Chat** — one multi-turn conversation, whose **counterparty is either the orchestrator
+  agent or one repo agent directly**. An orchestrator chat delegates (live: a real Claude
+  Agent SDK session; replay: a recorded trace). A direct chat relays the user's turns
+  straight to that repo's agent over A2A — no orchestrator agent, no SDK in the loop, which
+  against the rig means live *and* deterministic at once (UC8).
 - **Repo session** — an A2A conversation (a `contextId`, which the rig already serves
   multi-turn) with one repo agent. A chat can hold several, across repos or with the same
   repo repeatedly.
@@ -103,6 +107,11 @@ The design is checked against these; each names the machinery that serves it.
   `a2acode serve --cwd <checkout>` instances; chats, gates, panes all work unchanged, now
   with real inference behind the repo agents. *Served by:* the A2A seam (Domain model);
   config change only.
+- **UC8 — Talk to a repo directly.** Skip the orchestrator: open a project, pick a repo,
+  start a session with its agent, type free text, watch its stream, answer its gates. The
+  most basic consumer interaction there is — and against `playback` it needs no inference,
+  so "live" direct chats are themselves CI-able. *Served by:* direct chats (a chat whose
+  counterparty is a repo agent); the `direct-sessions` milestone.
 
 ## Layout
 
@@ -142,6 +151,12 @@ resumes. Gate decisions are human decisions, and they are what gets recorded.
 **Replay chats** walk a trace: emit the recorded narration, dispatch each recorded step to
 its repo, pause at recorded user turns and gates per the pacing mode. No inference, no SDK,
 millisecond turns. A repo task failing marks the turn failed and skips its remaining steps.
+
+**Direct chats** need neither brain: the chat *is* one repo session, and the service just
+relays turns and gate answers over A2A and streams the repo's events back. Recording a
+direct chat captures only the user's turns and gate answers — the repo side is already
+scripted by its scenarios — so replaying one is a convenience (a scripted conversation for
+UC4/UC5), not a necessity.
 
 **The recorder** tees live chats into `traces/<project>/*.yaml`. Scrubbed like Phase 7's
 recordings: shape kept, volatile identifiers (session ids, costs) dropped or rounded.
@@ -196,7 +211,7 @@ The only surface the frontend knows. Small on purpose:
 |---|---|
 | `GET /api/projects` | Projects from `projects.yaml`, each with its repos and chats |
 | `GET /api/projects/{p}/traces` | Recorded chats available to replay |
-| `POST /api/projects/{p}/chats` | Open a chat: `{mode: live\|replay, trace?, pacing, demo_dwell_ms?}` |
+| `POST /api/projects/{p}/chats` | Open a chat: `{agent: orchestrator\|<repo>, mode: live\|replay, trace?, pacing, demo_dwell_ms?}` |
 | `GET /api/chats/{id}` | Chat snapshot: turns so far, repo sessions, status |
 | `POST /api/chats/{id}/messages` | Send a user turn (live: free text; replay: advances the recorded turn) |
 | `GET /api/chats/{id}/events` | SSE stream, resumable via `Last-Event-ID` |
@@ -246,8 +261,9 @@ it.
 Vite + React + TS, no state library beyond `useReducer`/context until something demands
 one. The SSE stream feeds a single reducer; components render from that state:
 
-- **Project picker + chat sidebar** — projects from the API; each project lists its chats
-  (open one live, or replay a trace).
+- **Project picker + chat sidebar** — projects from the API; each project lists its chats.
+  Open a chat with the orchestrator (live or replay a trace) or directly with any of the
+  project's repos.
 - **Chat pane** — the conversation with the orchestrator: user turns, its narration, its
   dispatches summarized inline. In replay, the input offers the recorded next turn.
 - **Repo session panes** — one per repo session, rendering by event type: plan steps with
@@ -286,17 +302,23 @@ one. The SSE stream feeds a single reducer; components render from that state:
 
 ## Milestones
 
-Slugs, not numbers, per convention. Recording precedes replay by design.
+Slugs, not numbers, per convention. Direct sessions lead as the walking skeleton — the
+simplest end-to-end slice proves the API envelope, A2A relay, gate machinery, and renderers
+before the SDK enters — and recording still precedes replay where traces exist at all.
 
+- **`direct-sessions`** — projects from `projects.yaml`, thin chats API (open direct chat,
+  messages, SSE, gates), thin UI (chat pane + gate card). Exit: chat with a fake repo from
+  the browser, free text, answer a gate, zero inference — UC8 working end to end.
 - **`orchestrator-core`** — conversational live loop (SDK session per chat,
   `list_repos`/`send_to_repo` tools), A2A fan-out with repo sessions, recorder, terminal
   chat REPL (`orch-record`). Exit: real live chats against the rig recorded, scrubbed, and
   checked in — covering an allow path, a deny path, and a failing dispatch (UC6).
 - **`replay-engine`** — projects/chats API (SSE, messages, gates, pacing) + replay,
   `orch-serve`. Exit: pytest green against the rig, zero inference.
-- **`web-frontend`** — project picker, chat sidebar, chat pane, repo session panes, gate
-  cards, deep links. Exit: the browser demo — open a replay chat, watch the chat pane and
-  two repo panes, advance a recorded turn, answer a gate from the UI.
+- **`web-frontend`** — the full UI on the skeleton's bones: project picker, chat sidebar,
+  repo session panes, gate cards, deep links. Exit: the browser demo — open a replay chat,
+  watch the chat pane and two repo panes, advance a recorded turn, answer a gate from the
+  UI.
 - **`e2e-suite`** — Playwright green, zero inference; PLAN.md Phase 6 bullet checked; this
   spec's decisions graduate to DESIGN-v3.
 
