@@ -75,11 +75,12 @@ Mission  (emergent grouping of related coordinated work: its chats and its check
   turns straight to a repo agent over A2A — no orchestrator, no SDK in the loop.
 - **Checkout** — a worktree of one repo, owned by one mission: created when the mission
   first touches that repo (worktrunk's `~/worktrees/{repo}/{branch}` world is the obvious
-  mechanism), and the place that repo's agent actually works for this mission. **One
+  mechanism), and the place that repo's agents actually work for this mission. **One
   checkout per (mission, repo)** — so "send this to billing-api" is unambiguous inside a
   mission — and the same repo appears in two missions via two different checkouts.
   Addressing stays repo-shaped in conversation; the mission resolves it:
-  **(mission, repo) → checkout → endpoint**.
+  **(mission, repo) → checkout → endpoint**. A checkout can host several sessions at
+  once, but **one writer at a time** — an advisory lease, below.
 - **Repo session** — an A2A conversation (a `contextId`, which a2acode serves multi-turn)
   with the agent on one of the mission's checkouts.
 
@@ -212,6 +213,26 @@ tracks the process in the database (checkout, pid, port, health, last activity),
 across sessions, and reaps it when idle. Everything above the seam asks only "give me the
 endpoint for this repo, in this mission." The spawn provider is what makes the cockpit a real
 daily driver; it lands in the `real-agents` follow-on, not the Phase 6 milestones.
+
+**Agents in a worktree — cardinality and the writer lease.** An a2acode process serves one
+`--cwd`, so agent-process ↔ checkout starts 1:1 — but a checkout may host **multiple
+concurrent sessions** (a reviewer reading while the builder writes, a Q&A session
+answering questions mid-flight), whether multiplexed through one process or spread across
+several on the same checkout. The invariant is **one writer per checkout**: the service —
+which owns every dispatch — tracks an advisory write lease per checkout; one session holds
+it, the rest run read-shaped work concurrently. *Advisory* means it is not enforced by the
+filesystem: sessions declare intent at dispatch, the lease gates who may mutate, and
+permission gates are the backstop when a "reader" reaches for a write-shaped tool. The
+declaration and enforcement mechanism is deliberately TBD (see Open questions).
+Parallel *writing* comes from more checkouts, not more writers on one.
+
+**Agent scope.** Git worktrees share `.git` with the main clone, so an agent inherently
+sees its *repo* — full history, all branches and refs. That is a feature (diff against
+main, read another branch). What it must not touch is other *working trees*: the main
+clone's and other missions'. Enforcement there is **policy, not sandbox** — the agent can
+technically wander — so the practical controls are permission gates (a `Read` outside the
+checkout is visible and deniable) plus whatever sandbox config the spawn provider sets.
+Said plainly here so the spec doesn't imply isolation it doesn't have.
 
 ### Trace format
 
@@ -417,3 +438,13 @@ exist at all.
 - **Checkout management in real use** — who creates/owns the worktrees real repo agents
   sit on (worktrunk integration is the obvious candidate). Deferred to the `real-agents`
   milestone, alongside the spawn provider it belongs to.
+- **The writer-lease mechanism** — how a session declares read vs. write intent at
+  dispatch, what happens when a reader turns out to need the lease (queue? escalate?
+  fail?), and whether enforcement grows past advisory. Model is settled (one writer, N
+  readers, per checkout); mechanism decided at `real-agents`.
+- **Does a2acode serialize concurrent tasks in one process?** Unknown; determines whether
+  multi-session-per-checkout multiplexes through one process or takes a process per
+  session. Probe when `real-agents` starts — possibly upstream-shaped, given this repo's
+  track record.
+- **N checkouts per (mission, repo)** — if a mission ever genuinely wants two parallel
+  writing workstreams in one repo. Serialize-by-default until a real mission demands it.
