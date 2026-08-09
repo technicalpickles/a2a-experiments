@@ -1,17 +1,26 @@
 # Upstream issues to file
 
 Findings from this project that belong in someone else's repo, and what to say when filing
-them. Three filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
+them. Four filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
 `79297b49`+`167506a4` → [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170)
-with repro PR [#1171](https://github.com/a2aproject/a2a-python/pull/1171), and `5dcde5fb` →
-[a2acode#38](https://github.com/kanywst/a2acode/issues/38). The rest are drafts.
+with repro PR [#1171](https://github.com/a2aproject/a2a-python/pull/1171), `5dcde5fb` →
+[a2acode#38](https://github.com/kanywst/a2acode/issues/38), and `f010f63e` →
+[a2acode#39](https://github.com/kanywst/a2acode/issues/39). The rest are drafts.
 
-**Writing the issue is what verifies the note.** All three filings turned up claims here that
+**Writing the issue is what verifies the note.** All four filings turned up claims here that
 were wrong or incomplete, and one (the stale-read mechanism, below) would have been a public
-correction if it had shipped. Re-derive from source before filing, always. Note the third case
-was the most valuable: the wrong claim (`5dcde5fb`'s "written for a disconnected client") wasn't
-just an error to avoid shipping, it was hiding the *better* framing underneath it. Re-deriving
-isn't damage control, it's where the report gets good.
+correction if it had shipped. Re-derive from source before filing, always. Re-deriving isn't
+damage control, it's where the report gets good, and the last two prove it in both directions:
+
+- `5dcde5fb`'s wrong claim ("written for a disconnected client") was hiding the *better* framing
+  underneath it.
+- `f010f63e` was filed as a nit and came back a bug, because re-deriving found three downstream
+  sites already built to consume the thing the executor throws away.
+- The same pass **downgraded** `438d9c1c` and falsified its stated fix shape, which is why it
+  got split out and dropped down the queue instead of filed.
+
+So re-derivation changes *severity and scope*, not just facts. Sizing a finding from the note
+alone would have gotten both of those wrong, in opposite directions.
 
 **This doc is the "why", taskwarrior is the "when".** Each entry carries the UUID of its
 taskwarrior task (project `a2a-experiments`, tag `a2a`) — that's the actionable backlog and
@@ -25,7 +34,7 @@ Three habits worth keeping:
 - **Lead with the diff, not the philosophy.** Several of these could be argued as intended
   behavior. An issue that opens with "V1 did X, V2 does Y" starts a conversation about a
   regression; one that opens with "cancel *should* mean..." starts an argument about design.
-- **Look for the test that supplies the thing it's testing.** Three for three, and it is the
+- **Look for the test that supplies the thing it's testing.** Four for four, and it is the
   most reliable smell in this whole exercise. a2acode's plan test hand-builds
   `ToolUseBlock(name="TodoWrite")`, so it cannot notice the tool was renamed out from under it.
   a2a-python's cancel test hand-enqueues the `CANCELED` event, so it cannot notice the framework
@@ -39,6 +48,11 @@ Three habits worth keeping:
   `_pump`'s CancelledError branch have zero coverage, because a2acode's cancel tests all sit a
   layer below the protocol. So the question isn't only "what does the test fake?" but "what
   layer does the coverage stop at?" Same payoff either way.
+  **The fourth ([#39](https://github.com/kanywst/a2acode/issues/39)) is the purest instance
+  yet:** `_FakeSession` takes a `PermissionDecision` in its *constructor*, so the deny path is
+  thoroughly covered below the executor and never through it. Note the framing used there, since
+  it's why these land: say the tests are good tests of the thing they actually target, and that
+  they just construct the input themselves. Same finding, no implied sloppiness.
 - **Run the final text through the `writing-voice` skill.** These drafts are notes to
   ourselves; an issue body is outbound prose with my name on it.
 
@@ -282,9 +296,12 @@ class of break will happen again.
 
 ### Permission deny discards the caller's text
 
-**Task:** `f010f63e` · Small; a nit rather than a bug
+**FILED 2026-08-08:** [kanywst/a2acode#39](https://github.com/kanywst/a2acode/issues/39), which
+is the body of record.
 
-`executor.py` (~L502-506) builds the decision from the caller's message, but on a denial always
+**Task:** `f010f63e` (done) · ~~Small; a nit rather than a bug~~ **A bug, and not a nit.**
+
+`executor.py:497-507` builds the decision from the caller's message, but on a denial always
 sends `"Denied by A2A caller"` — whatever the caller actually wrote is dropped. So there's no
 way to deny *with guidance* ("not that command, try `pytest -x`"), which is the useful half of
 a denial.
@@ -292,25 +309,62 @@ a denial.
 **Why we care specifically:** it caps how rich a scripted deny branch can plausibly be. A
 scenario can't model "denied with a redirect" because the real producer can't express it.
 
-**Fix shape:** pass the caller's text through as `PermissionDecision.message`, which already
-exists and is already the obvious home for it.
+**Re-deriving upgraded this from nit to bug.** The feature is built end to end and one line
+makes it unreachable. Three sites already read `decision.message` on the deny path, each with
+its own fallback: `base.py:120` defines the field, `claude.py:197` sends
+`PermissionResultDeny(message=decision.message or "Denied by A2A caller")`, and `acp.py:444`
+raises `auth_required({"reason": decision.message or "terminal denied by the A2A caller"})`.
+**The string hardcoded at `executor.py:506` is character-for-character `claude.py:197`'s own
+fallback**, so the executor supplies the default the backend would have supplied anyway, making
+that `or` branch dead code. That single observation is the whole argument, and it's what turned
+a "would be nice" into "this was meant to work."
+
+**Fix shape:** pass the caller's text through as `PermissionDecision.message`. Watch the
+lowercase trap: `executor.py:501` does `.strip().lower()` for the allow-word match, so the fix
+needs the *raw* input or the agent gets casing-flattened guidance.
+
+**Blind-spot smell, four for four.** `tests/test_acp.py:293-300`'s `_FakeSession` takes a
+`PermissionDecision` in its constructor and returns it, so every permission test bypasses
+`Executor._decision` entirely. The deny path is well covered *below* the executor and not at
+all *through* it. Framed generously in the issue (those are good tests of the ACP bridge, they
+just construct the decision themselves), which is the framing that keeps making these land.
 
 ### `ACPBackend` exposes no cost ceiling
 
-**No task yet** · Small; a nit rather than a bug
+**Task:** `438d9c1c` · **Not filed, and deliberately dropped down the queue** (see the split
+note below)
 
-`ClaudeBackend` takes `max_budget_usd` and enforces it; `ACPBackend` takes no such argument,
-though the ACP connection tracks `cost_usd` internally — so a ceiling is implementable there,
-it just isn't exposed.
+~~`ClaudeBackend` takes `max_budget_usd` and enforces it;~~ **Wrong, corrected 2026-08-08 while
+re-deriving.** `ClaudeBackend` takes `max_budget_usd` (`claude.py:155`) and *delegates*
+enforcement: it sets `options.max_budget_usd` (`claude.py:184-185`) and lets the Claude Agent
+SDK do the enforcing. a2acode enforces nothing itself.
+
+`ACPBackend.__init__` (`acp.py:550-558`) takes no such argument. The connection does track cost
+(`self.cost_usd` at `acp.py:316`, set from `update.cost.amount` at `:358`, reported at `:640`),
+so the *data* is there.
 
 **Why we care specifically:** combined with the `TodoWrite` finding above, the only backend
 that can record a `plan` event is the one with no cost ceiling. `rig-record` therefore rejects
 `--max-budget-usd` on `--backend acp` and says so at startup, rather than accepting a flag it
 cannot honor.
 
-**Fix shape:** plumb `max_budget_usd` through `ACPBackend` the way `ClaudeBackend` already
-does. Possibly deliberate — ACP fronts agents whose cost accounting isn't a2acode's to enforce
-— so lead with the question rather than the patch.
+~~**Fix shape:** plumb `max_budget_usd` through `ACPBackend` the way `ClaudeBackend` already
+does.~~ **There is nothing to plumb.** ClaudeBackend's "way" is handing a knob to the Anthropic
+SDK, and ACP is a generic protocol fronting arbitrary agents with no equivalent knob. Giving
+ACP a ceiling means a2acode enforcing one *itself*: watch `cost_usd` on session updates, abort
+mid-turn when it crosses, decide what task state that lands in. That's a feature with real
+design questions, not a nit.
+
+**So the "possibly deliberate" hedge was right, for a better reason than the note knew.** It
+isn't that ACP costs philosophically aren't a2acode's to enforce; it's that ACP gives a2acode
+no mechanism to enforce them the way Claude does. If this ever gets filed, it's a question or a
+feature request, not a bug report.
+
+**Split from `f010f63e` on 2026-08-08.** The filing order had paired them as "same repo, same
+size, same *is this deliberate?* shape." Re-deriving falsified all three: `f010f63e` turned out
+to be a one-line bug with an obvious right answer, this one an open-ended feature request.
+Bundling them would bury the one with a clear answer under the one needing a conversation —
+the same reasoning already applied to keep `e653db90` separate.
 
 ### The acp backend drops tool-call arguments
 
@@ -426,13 +480,18 @@ Noted here so the decision not to file is a decision rather than an oversight.
    the two fixes are independent and each individually sufficient, so it neither depends on
    `#1170` nor completes it. It was filed on its own merits (a2acode can fix itself now, without
    waiting on another repo). `34c83f8c` still wants the SDK response first.
-3. **`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes. The
+3. ~~**`f010f63e` to a2acode** any time. Independent of everything else, small, easy yes. The
    `ACPBackend` cost-ceiling nit rides along here — same repo, same size, same "is this
-   deliberate?" shape, and it reads better as a pair than as a lone quibble.
+   deliberate?" shape, and it reads better as a pair than as a lone quibble.~~
+   **`f010f63e` DONE and filed ALONE** — [#39](https://github.com/kanywst/a2acode/issues/39).
+   The pairing didn't survive re-derivation: `f010f63e` is a one-line bug with a right answer,
+   `438d9c1c` is a feature request needing a2acode to build enforcement it doesn't have. All
+   three claimed similarities were false. `438d9c1c` is now unfiled and low priority.
    **The dropped tool-call arguments file separately**, despite being the same repo: it is a
    plain data-loss bug with a checked-in recording as the repro, not a design question, and
-   bundling it with two "is this deliberate?" nits would bury the one item that has evidence
-   attached.
+   bundling it with a "is this deliberate?" nit would bury the one item that has evidence
+   attached. **That instinct was right twice now** — it's the same call that split `f010f63e`
+   from `438d9c1c`, so treat "does bundling bury the one with evidence?" as the standing test.
 4. **`cc7feef9` to a2a-cli** any time. The work already exists.
 
 **`70dc7c04` jumped the queue and is filed** ([a2acode#37](https://github.com/kanywst/a2acode/issues/37),

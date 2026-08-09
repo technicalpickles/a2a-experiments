@@ -1229,3 +1229,78 @@ as-is rather than verify first; the alternative was a rig run to flip the existi
 cancel test, which is still the obvious follow-up if #38 gets traction.
 
 Nothing in the rig changed this session. Suite untouched at 165 passed / 4 xfailed.
+
+## 2026-08-08 — the fourth filing, and a pair that split
+
+Filed `f010f63e` as [a2acode#39](https://github.com/kanywst/a2acode/issues/39). Four of nine
+out. Went in to file it *with* `438d9c1c` as a pair of small nits, per the filing order, and
+re-deriving both broke the pairing.
+
+### `f010f63e` came back a bug, not a nit
+
+The entry had it as "the caller's deny text is dropped, small, a nit rather than a bug." The
+dropping is real, but the note missed why it matters: the feature is built end to end and one
+line makes it unreachable.
+
+- `PermissionDecision.message` is a real field (`base.py:120`)
+- `claude.py:197` sends `PermissionResultDeny(message=decision.message or "Denied by A2A caller")`
+- `acp.py:444` raises `auth_required({"reason": decision.message or "terminal denied by the A2A caller"})`
+
+Three sites written to pass caller text through when it's there. And `executor.py:506` hardcodes
+`"Denied by A2A caller"`, which is character-for-character `claude.py:197`'s own fallback. The
+executor supplies the default the backend would have supplied anyway, so the `or` branch is dead
+code and the caller's text can never arrive.
+
+That one observation carries the entire issue. It converts "would be nice" into "this was
+clearly meant to work," which is a much easier yes for a maintainer.
+
+Also caught a trap in the fix: `executor.py:501` does `.strip().lower()` for the allow-word
+match, so the naive `message=text` patch hands the agent casing-flattened guidance. The fix
+needs the raw input.
+
+### `438d9c1c` went the other way, and its fix shape was wrong
+
+The entry said `ClaudeBackend` "takes `max_budget_usd` and enforces it," and that the fix was to
+plumb it through `ACPBackend` the same way. Neither holds. `ClaudeBackend` sets
+`options.max_budget_usd` (`claude.py:184-185`) and lets the Claude Agent SDK enforce it. a2acode
+enforces nothing itself.
+
+ACP is a generic protocol fronting arbitrary agents and has no equivalent knob, so there is
+nothing to plumb. A ceiling there means a2acode enforcing one itself: watch `cost_usd` (tracked
+at `acp.py:316`/`:358`, so the data exists), abort mid-turn when it crosses, decide what task
+state that lands in. Feature with design questions, not a nit.
+
+The old "possibly deliberate" hedge was right for a better reason than the note knew. Not that
+ACP costs philosophically aren't a2acode's to enforce, but that ACP hands a2acode no mechanism
+to enforce them the way Claude does.
+
+### The split, and the test that generalizes it
+
+The filing order paired these as "same repo, same size, same *is this deliberate?* shape."
+Re-deriving falsified all three. Bundling a one-line bug with a clear answer into an
+open-ended feature request buries the one that can be said yes to.
+
+That's the same call UPSTREAM already made to keep `e653db90` (dropped tool-call arguments) out
+of the nit bundle, so it's now written down as a standing test: **does bundling bury the item
+that has evidence attached?** If yes, split. Right twice, and both times the instinct arrived
+before the reasoning.
+
+### What re-derivation actually does
+
+Worth stating plainly, because three sessions of filings have made it concrete: re-derivation
+changes *severity and scope*, not just facts. This session it upgraded one finding and
+downgraded another in the same pass. Sizing either from the note alone would have been wrong,
+in opposite directions, and the ordering decision that followed from the sizes would have been
+wrong too.
+
+### Blind-spot smell, four for four
+
+Purest instance yet. `tests/test_acp.py:293-300`'s `_FakeSession` takes a `PermissionDecision`
+in its *constructor* and hands it back, so every permission test bypasses `Executor._decision`.
+The deny path is thoroughly covered below the executor and never through it.
+
+Framing note that's now in UPSTREAM, because it's why these land: say the tests are good tests
+of the thing they actually target, and that they just construct the input themselves. Same
+finding, no implied sloppiness. "You have a blind spot" keeps outperforming "you have a bug."
+
+Rig untouched again. Suite still 165 passed / 4 xfailed. Taskwarrior at 16 pending.
