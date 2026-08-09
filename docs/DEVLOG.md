@@ -1397,3 +1397,34 @@ in the notes for a day looking confidently filed-ready and was unfileable, and t
 `tee` turned it into the best-evidenced of the five.
 
 Rig untouched again. Suite still 165 passed / 4 xfailed. Taskwarrior at 15 pending.
+
+### Edited #40 after filing: an eliminative header and a shipped tell
+
+Josh read the filed issue and said the "Why I don't think this is a careless bug" section
+missed. He was right on two counts, and a rescan found a third.
+
+**The header was eliminative.** It defines the section by what the bug isn't, and it plants
+"careless" in the maintainer's head purely so the next sentence can reassure them about it.
+Nobody had raised carelessness until we did. That's squarely against the standing "direct
+assertion over elimination" rule, and it's the one place in three issues where the framing
+turned on a verdict about someone's competence rather than about their code.
+
+**It opened with a compliment sandwich.** "That's a good property and it's why the mapper is
+pleasant to test," immediately before explaining what's broken. The generous framing that
+actually worked in #37 and #39 was plain accurate description ("those are good tests of the
+thing they actually target"). It lands because it's true, not because it's kind, and it says
+nothing about the author. Announcing charity reads as technique.
+
+**And `Worth noting` shipped, a filler transition on the skill's own list.** Worse than the tell
+is how it got through: the earlier scan grepped `it's worth noting`, the form shown in the
+skill's summary, and reported all three drafts clean. The bare form is only in
+`references/anti-ai-tells.md`, which never got opened. A self-check built from the same
+incomplete memory as the draft cannot catch what the memory is missing.
+
+Rewrote the section as "The mapper has no memory, by design", cut the compliment and the filler,
+and pushed it with `gh issue edit 40`. Verified against the live body. Full rescan of the
+revised draft against the complete reference is clean.
+
+Two habits out of it, both now in UPSTREAM.md: **invoke `writing-voice` per issue, not once per
+session** (#38 invoked it, #39 and #40 coasted on context, #40 is where it showed), and
+**actually read the anti-tells reference** rather than the summary list.

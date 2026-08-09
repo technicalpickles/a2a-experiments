@@ -64,7 +64,21 @@ Three habits worth keeping:
   it's why these land: say the tests are good tests of the thing they actually target, and that
   they just construct the input themselves. Same finding, no implied sloppiness.
 - **Run the final text through the `writing-voice` skill.** These drafts are notes to
-  ourselves; an issue body is outbound prose with my name on it.
+  ourselves; an issue body is outbound prose with my name on it. **Per issue, not once per
+  session** — #38 invoked it, #39 and #40 coasted on it still being in context, and #40 shipped
+  a tell as a result. **And actually open `references/anti-ai-tells.md`.** Working from the
+  summary list in the skill body missed a bare `Worth noting` (the summary shows the
+  `It's worth noting` form), which then survived a grep built from the same incomplete memory.
+  A self-check written from the thing you're checking is not a check.
+- **Watch for eliminative headers and compliment sandwiches specifically.** #40 shipped a
+  section headed *"Why I don't think this is a careless bug"*, which nobody had accused them of
+  until we raised it, and which defines the section by what it isn't — against Josh's standing
+  "direct assertion over elimination" rule. It opened with *"that's a good property"* too;
+  praising someone's design immediately before criticizing it reads as technique, not warmth.
+  Fixed in place to *"The mapper has no memory, by design"*. **The generous framing that works
+  is accurate description, not announced charity** — "those are good tests of the thing they
+  actually target" (#39) lands because it's simply true, and says nothing about anyone's
+  character.
 
 **Versions in play:** a2acode v0.6.2, `a2a-sdk` 1.1.2 (a2acode pins `>=1.1,<2`),
 `a2a-inspector` pinning `a2a-sdk` 0.3.10.
