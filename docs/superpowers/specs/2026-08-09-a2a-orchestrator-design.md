@@ -55,9 +55,11 @@ Mission  (emergent grouping of related coordinated work: its chats and its check
 └── Direct chat        (a conversation held straight with one repo agent — it IS a repo session)
 ```
 
-- **Catalog** — the set of repo agents the cockpit can reach. Today: the rig's index
-  (`GET /`). Later: a registry of real checkouts each served by a2acode. Configuration
-  points at the catalog; everything else is runtime.
+- **Catalog** — the set of repo agents the cockpit can reach. An entry resolves to a
+  running A2A endpoint through a provider: today the rig's index (`GET /`, agents already
+  running); later a spawn provider that launches and supervises a2acode per checkout
+  ("Agent process management," below). Configuration points at the catalog; everything
+  else is runtime.
 - **Mission** — the unit of grouping: one piece of related work being coordinated — a
   ticket, an exploration — holding the chats it accumulated and the checkouts it touched.
   **Missions are emergent, not predeclared:** created by starting one, never by editing
@@ -140,6 +142,7 @@ a2a-orchestrator/
     e2e/                       # Playwright (same toolchain as the frontend)
   catalog.yaml                 # where the repo agents are (rig index URL today)
   traces/                      # recorded chats, scrubbed, checked in
+  var/                         # runtime state: orchestrator.db (gitignored)
   tests/                       # pytest
   README.md                    # self-contained, like a2a-rig's
 ```
@@ -179,10 +182,21 @@ shape kept, volatile identifiers (session ids, costs) dropped or rounded. Before
 cockpit exists, recording runs through a terminal chat REPL in `orch-record` — type turns,
 answer gates y/n.
 
-**Persistence:** mission metadata (title, repos touched, chat list) and chat event logs go
-to disk as they happen — a JSON/JSONL store, no database — because "resume a mission days
-later" is a product use case, and an in-memory-only service can't serve it. Live SSE
-resume uses the same logs via `Last-Event-ID`.
+**Persistence:** SQLite, one file, no server. It tracks missions (title, repos touched),
+chats and their turns, repo sessions (`contextId`, checkout, status), pending gates, chat
+event logs, and the agent process registry (below) — because "resume a mission days later"
+is a product use case, and an in-memory-only service can't serve it. Live SSE resume reads
+the same event log via `Last-Event-ID`. The database file lives outside git
+(`var/orchestrator.db`, gitignored); traces remain the durable, shareable form of a chat.
+
+**Agent process management:** repo sessions need a running A2A endpoint, and resolving one
+is a seam with two providers. The **index provider** points at already-running agents —
+the rig's `GET /` index; this is all the substrate needs. The **spawn provider** launches
+`a2acode serve --cwd <checkout>` on demand when a mission first touches a repo, tracks the
+process in the database (checkout, pid, port, health, last activity), reuses it across
+sessions, and reaps it when idle. Everything above the seam asks only "give me the
+endpoint for this catalog entry." The spawn provider is what makes the cockpit a real
+daily driver; it lands in the `real-agents` follow-on, not the Phase 6 milestones.
 
 ### Trace format
 
@@ -327,7 +341,7 @@ simplest end-to-end slice proves missions, the API envelope, A2A relay, gate mac
 and renderers before the SDK enters — and recording still precedes replay where traces
 exist at all.
 
-- **`direct-sessions`** — catalog + mission store + thin chats API (open direct chat,
+- **`direct-sessions`** — catalog (index provider) + SQLite store + thin chats API (open direct chat,
   messages, SSE, gates) + thin UI (mission list, chat pane, gate card). Exit: start a
   fresh mission in the browser, chat with a fake repo in free text, answer a gate, zero
   inference — use cases 1 and 4 working end to end against the rig.
@@ -343,6 +357,10 @@ exist at all.
   repo panes, advance a recorded turn, answer a gate from the UI.
 - **`e2e-suite`** — Playwright green, zero inference; PLAN.md Phase 6 bullet checked;
   this spec's decisions graduate to DESIGN-v3.
+- **`real-agents`** *(follow-on, beyond Phase 6's exit)* — the spawn provider: launch and
+  supervise a2acode per checkout, process registry in the database, idle reaping;
+  worktrunk integration for checkout creation decided here. This is where the cockpit
+  stops being a demo and starts being the daily driver.
 
 ## Risks
 
@@ -373,5 +391,5 @@ exist at all.
 - **Auto-titling missions** — suggested from the first exchange; mechanism (model-derived
   vs. heuristic) decided when live chats exist.
 - **Checkout management in real use** — who creates/owns the worktrees real repo agents
-  sit on (worktrunk integration is the obvious candidate). Out of scope until the cockpit
-  points at real agents.
+  sit on (worktrunk integration is the obvious candidate). Deferred to the `real-agents`
+  milestone, alongside the spawn provider it belongs to.
