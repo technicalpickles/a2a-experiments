@@ -1513,3 +1513,47 @@ transferable part:
 
 Rig untouched. Suite still 165 passed / 4 xfailed. Taskwarrior at 15 pending. Five issues out,
 five docs commits unpushed.
+
+## 2026-08-08 — sixth filing, and the one asymmetry that decided it
+
+Resumed from the handoff: pushed the six unpushed docs commits first, then picked up
+`777656ed` (binary `PermissionDecision` flattens ACP's `ExitPlanMode` options) — the entry
+explicitly flagged as patterning like `438d9c1c`, which got parked as a design question rather
+than filed.
+
+Re-derived against current a2acode source (still pinned v0.6.2) before doing anything else.
+Every claim held with no drift: `PermissionDecision.allow: bool` at `backends/base.py:114-120`,
+`select_option`'s one-shot-over-sticky preference at `acp.py:155-174`, the `371` call site, and
+the "completed not failed" consequence, checked directly against `executor.py`'s control flow
+(the only paths to `updater.failed()` are an unhandled exception or session eviction — a denied
+`ExitPlanMode` drains normally and falls through to `updater.complete()`). The three-option
+table's source turned out to live one layer further down than the entry implied: ACP's option
+*kinds* are generic (`acp/schema.py`'s `PermissionOptionKind` literal), but the specific mapping
+of Claude Code's `acceptEdits`/`default`/`plan` modes onto them is `claude_agent_sdk`'s, not
+a2acode's — confirmed by reading `claude_agent_sdk/types.py` directly rather than trusting the
+note's paraphrase.
+
+That re-derivation is what decided the file-or-park question the handoff left open. `438d9c1c`
+was parked because there was no mechanism to enforce a cost ceiling over ACP at all — filing it
+would have meant asking a2acode to invent one. `777656ed` is different in exactly the way that
+matters: the agent is *already sending* three option kinds over the wire, and a2acode's binary
+`PermissionDecision` throws one of them away before it ever reaches a caller. Nothing to invent,
+just something already arriving that gets discarded. Filed as
+[a2acode#41](https://github.com/kanywst/a2acode/issues/41), diff-first per the standing habit:
+opens with what a2acode does today (deny ends the task `completed`), not a case for why the
+protocol *should* carry three options.
+
+One filing mechanic worth keeping: drafted the issue as a single scratch file with `# Title` /
+`# Body` sections for readability, then piped the whole file into `gh issue create --body-file`
+without splitting it first. The posted issue carried the `# Title` heading and a duplicate title
+line inside the body. Caught on the review pass immediately after filing (`gh issue view --json
+body`), fixed with `gh issue edit --body-file` pointed at just the body half. Splitting the
+scratch file before the `gh` call would have skipped the round trip entirely — the two-section
+format is fine for drafting, it just can't go straight into `--body-file`.
+
+Also fixed a small case of doc rot the parked handoff had flagged: `docs/UPSTREAM.md` still said
+"No task yet" under this finding, though `777656ed` had been created in taskwarrior before the
+session was parked. Descriptions and reality drift even inside a single session's boundary.
+
+Rig untouched. Suite still 165 passed / 4 xfailed. Taskwarrior task `777656ed` closed; 14
+pending. Six issues out.

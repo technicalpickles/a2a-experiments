@@ -467,7 +467,17 @@ carries no underlying tool-name field for a2acode to prefer.
 
 ### A binary `PermissionDecision` flattens ACP's multi-option gates
 
-**No task yet** · Design question more than a bug, evidenced by a real recording
+**FILED:** [a2acode#41](https://github.com/kanywst/a2acode/issues/41)
+
+**Task:** `777656ed` · Design question more than a bug, evidenced by a real recording
+
+**Re-derived 2026-08-08, holds exactly.** Every line number, the `select_option` preference
+order, and the "completed not failed" consequence all still match current source
+(`backends/base.py:114-120`, `acp.py:155-174,371`, `executor.py`'s single path to
+`updater.failed()` being exception-or-eviction only). Unlike `438d9c1c`, ACP already carries the
+distinction here — the agent is already sending three option kinds — so this isn't "invent a new
+mechanism," it's "a2acode is throwing away a distinction the wire already hands it." That's the
+one asymmetry that argues for filing where `438d9c1c` didn't.
 
 `PermissionDecision` is `allow: bool` (`backends/base.py:114-120`), and `acp.py:371` resolves
 it against ACP's option list with `select_option`, preferring one-shot over sticky. For an edit
