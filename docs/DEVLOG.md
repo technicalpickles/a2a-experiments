@@ -1304,3 +1304,96 @@ of the thing they actually target, and that they just construct the input themse
 finding, no implied sloppiness. "You have a blind spot" keeps outperforming "you have a bug."
 
 Rig untouched again. Suite still 165 passed / 4 xfailed. Taskwarrior at 16 pending.
+
+## 2026-08-08 — the fifth filing, and the one that needed a wire trace
+
+Filed `e653db90` as [a2acode#40](https://github.com/kanywst/a2acode/issues/40). Five of nine
+out. This is the entry where re-derivation first said *don't file*, and then a capture said
+*now you can*.
+
+### The note was wrong three ways at once
+
+The symptom was real (`tool_use` events carry `input: {}`), but everything explaining it was
+wrong:
+
+- **The proposed fix was already implemented.** The note said to carry `raw_input` into the
+  `ToolUse` event. `acp.py:134` already does `tool_input=_as_dict(update.raw_input)`.
+- **The evidence was an invalid inference.** "The permission event from the same turn carries
+  the full `Edit` payload, so the data is available at that layer." That payload arrives via
+  `request_permission(tool_call: s.ToolCallUpdate)`, a *different protocol message* from the
+  `session/update` notification the mapper handles. One carrying args says nothing about the
+  other.
+- **The third claim wasn't a bug at all.** "Tool names should be ids (`Read`) not labels
+  (`Read File`)" is asking ACP's `title` field to stop being what it is. `ToolCall` has no
+  underlying tool-name field to prefer.
+
+So the honest verdict mid-session was: not fileable, and two-thirds of it may not even be
+a2acode's. What was missing was evidence about what the *agent* sends, and no existing capture
+had it, because every recording we own is post-mapping. They show a2acode's output, not its
+input.
+
+### The capture, and what it settled
+
+Thirty lines: `scratch/acp-tee.sh` puts a `tee` on both directions of the agent's stdio,
+`scratch/acp_trace.py` drives one turn through `ACPBackend` directly against
+`~/scratch/demo-app`. One file read produced this:
+
+| # | `sessionUpdate` | `title` | `status` | `rawInput` |
+|---|---|---|---|---|
+| 1 | `tool_call` | `Read File` | `pending` | `{}` |
+| 2 | `tool_call_update` | `Read app.py` | absent | `{"file_path": "/.../app.py"}` |
+| 3 | `tool_call_update` | absent | absent | absent |
+| 4 | `tool_call_update` | absent | `completed` | absent |
+
+ACP streams one tool call across several messages, each refining the last. The agent announces
+before it has parsed arguments, fills them in on message 2, completes on message 4. Absent
+means *unchanged* (`ToolCallUpdate`'s fields are all `Optional = None`, documented "Update the
+raw input", "Update the human-readable title").
+
+a2acode reads `raw_input` only on message 1, where it is genuinely `{}`, and its
+`ToolCallProgress` branch (`acp.py:139-143`) never reads `raw_input` at all. **The arguments
+arrive and get dropped on the floor.** Same cause for `name=''`: `_tool_results` reads
+`update.title` on message 4, absent because unchanged.
+
+So it *is* a2acode's bug, definitively, and both symptoms are one root cause. Two gotchas the
+run itself taught: the tee needs **absolute** paths (the agent subprocess runs with `--cwd` as
+its working directory, so relative ones silently write nowhere and you get an empty trace with
+no error), and the `BackendEvent` dataclasses use `slots=True`, so `vars()` raises and you want
+`getattr`.
+
+### Two things the capture found that no note had
+
+- **The two symptoms are not the same size.** `executor.py:349`/`:358` stash tool names by id
+  and fall back to them, so the empty `name` never reaches an A2A client. The arguments have no
+  such fallback. Treating them as equal halves was wrong.
+- **The best detail in the issue.** `_describe_tool` (`executor.py:207-217`) reads
+  `tool_input`, so a `Bash` call over ACP renders as literally `$ ` with no command. And its
+  comment says "ACP names a tool call with a human title that often already says the path
+  (`Write calc.py`)" — which describes *message 2's* refined title, the one a2acode drops in
+  favour of message 1's `Read File`. Someone wrote a fallback for exactly this case and the
+  mapper never gives it the chance. That is evidence the loss already tripped someone, which
+  beats any amount of me asserting it matters.
+
+### Josh's question: what do we mean by "purity"?
+
+The draft leaned on the word as though it explained itself. It doesn't, and the property that
+matters here is narrower: **the function has no memory of the previous message.** That is what
+makes it unable to attach message 2's arguments to a call emitted from message 1.
+
+Asking also caught a real imprecision. The draft had offered "pass the state in as an argument
+to keep it pure," which keeps it *testable* but not pure, since mutating a caller's dict is a
+side effect. The rewritten suggestion leaves `events_from_update` alone entirely and merges
+*before* calling it, in `session_update`, which already owns per-connection state. The mapper
+is untouched and its tests don't move. Better fit for their design, and a better thing to hand
+a maintainer than "relax your invariant."
+
+"Pure" now appears exactly once in the issue, inside their own quoted docstring.
+
+### The habit this adds
+
+When a claim is about what someone *else* sent you, only the wire can answer it. Reading your
+own source can prove what you did with the data; it cannot prove what arrived. `e653db90` sat
+in the notes for a day looking confidently filed-ready and was unfileable, and thirty lines of
+`tee` turned it into the best-evidenced of the five.
+
+Rig untouched again. Suite still 165 passed / 4 xfailed. Taskwarrior at 15 pending.

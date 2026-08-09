@@ -1,16 +1,17 @@
 # Upstream issues to file
 
 Findings from this project that belong in someone else's repo, and what to say when filing
-them. Four filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
+them. Five filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
 `79297b49`+`167506a4` → [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170)
 with repro PR [#1171](https://github.com/a2aproject/a2a-python/pull/1171), `5dcde5fb` →
-[a2acode#38](https://github.com/kanywst/a2acode/issues/38), and `f010f63e` →
-[a2acode#39](https://github.com/kanywst/a2acode/issues/39). The rest are drafts.
+[a2acode#38](https://github.com/kanywst/a2acode/issues/38), `f010f63e` →
+[a2acode#39](https://github.com/kanywst/a2acode/issues/39), and `e653db90` →
+[a2acode#40](https://github.com/kanywst/a2acode/issues/40). The rest are drafts.
 
-**Writing the issue is what verifies the note.** All four filings turned up claims here that
+**Writing the issue is what verifies the note.** All five filings turned up claims here that
 were wrong or incomplete, and one (the stale-read mechanism, below) would have been a public
 correction if it had shipped. Re-derive from source before filing, always. Re-deriving isn't
-damage control, it's where the report gets good, and the last two prove it in both directions:
+damage control, it's where the report gets good:
 
 - `5dcde5fb`'s wrong claim ("written for a disconnected client") was hiding the *better* framing
   underneath it.
@@ -18,9 +19,18 @@ damage control, it's where the report gets good, and the last two prove it in bo
   sites already built to consume the thing the executor throws away.
 - The same pass **downgraded** `438d9c1c` and falsified its stated fix shape, which is why it
   got split out and dropped down the queue instead of filed.
+- `e653db90` is the extreme case: the symptom was real, and the mechanism, the evidence, *and*
+  the proposed fix were each independently wrong. The fix it asked for was already implemented.
 
 So re-derivation changes *severity and scope*, not just facts. Sizing a finding from the note
-alone would have gotten both of those wrong, in opposite directions.
+alone would have gotten those wrong in both directions.
+
+**And when the note can't be settled from source alone, go get the evidence.** `e653db90`
+needed the raw ACP wire, which no existing capture held, because the recordings are
+*post*-mapping and therefore show a2acode's output rather than the agent's input. Thirty lines
+(`scratch/acp-tee.sh` teeing the agent's stdio, `scratch/acp_trace.py` driving one turn) turned
+a finding that was **not fileable** into the best-evidenced issue of the five. Budget for that
+too: when a claim is about what someone *else* sent you, only the wire can answer it.
 
 **This doc is the "why", taskwarrior is the "when".** Each entry carries the UUID of its
 taskwarrior task (project `a2a-experiments`, tag `a2a`) — that's the actionable backlog and
@@ -368,7 +378,11 @@ the same reasoning already applied to keep `e653db90` separate.
 
 ### The acp backend drops tool-call arguments
 
-**No task yet** · Small, and evidenced by a real recording
+**FILED 2026-08-08:** [kanywst/a2acode#40](https://github.com/kanywst/a2acode/issues/40), which
+is the body of record.
+
+**Task:** `e653db90` (done) · **The symptom was real; the mechanism, the evidence, and the fix
+in these notes were all wrong.** Settled by capturing the raw ACP wire (below).
 
 Every `tool_use` event out of `ACPBackend` carries an empty `input`, every `tool_result` carries
 an empty `name`, and the tool names are UI labels (`Read File`, `ToolSearch`) rather than tool
@@ -376,19 +390,66 @@ ids (`Read`, `Grep`). Evidence is the promoted recording,
 `a2a-rig/repos/billing-api/scenarios/20-recorded-health.yaml`: sixteen events, and not one
 `tool_use` says *what* it read or edited.
 
-The arguments are demonstrably available at that layer — the `permission` event recorded from
+~~The arguments are demonstrably available at that layer — the `permission` event recorded from
 the same turn carries the full `Edit` payload (`file_path`, `old_string`, `new_string`,
-`replace_all`). So this is a mapping gap in `events_from_update`, not missing upstream data.
-Compare `ClaudeBackend`, whose Phase 2 capture (`docs/captures/phase2-claude-run.jsonl`) does
-carry tool detail.
+`replace_all`). So this is a mapping gap in `events_from_update`, not missing upstream data.~~
+**Invalid inference.** The permission payload arrives via
+`request_permission(tool_call: s.ToolCallUpdate)`, a *different protocol message* from the
+`session/update` notification `events_from_update` maps. That one carries args proves nothing
+about the other.
 
-**Why we care specifically:** a consumer rendering a tool timeline gets "Edit" with no file
-name. It also degrades recordings permanently — a recording is only as good as the events it
-saw, so every scenario captured through the acp path is missing this and re-recording after a
-fix is the only way to get it back.
+~~**Fix shape:** carry `tool_call.raw_input` (and the tool id) into the `ToolUse` event the way
+`request_permission` already does at `acp.py:363`.~~ **Already implemented.** `acp.py:134`
+does exactly `tool_input=_as_dict(update.raw_input)` on `ToolCallStart`. The note asked for a
+line that was already there.
 
-**Fix shape:** carry `tool_call.raw_input` (and the tool id) into the `ToolUse` event the way
-`request_permission` already does at `acp.py:363`.
+**What is actually happening, from the wire** (`scratch/acp-tee.sh` + `scratch/acp_trace.py`,
+one turn against `~/scratch/demo-app`). ACP streams one tool call across several messages, each
+refining the last:
+
+| # | `sessionUpdate` | `title` | `status` | `rawInput` |
+|---|---|---|---|---|
+| 1 | `tool_call` | `Read File` | `pending` | `{}` |
+| 2 | `tool_call_update` | `Read app.py` | absent | `{"file_path": "/.../app.py"}` |
+| 3 | `tool_call_update` | absent | absent | absent |
+| 4 | `tool_call_update` | absent | `completed` | absent |
+
+Absent means *unchanged*, not empty: `ToolCallUpdate`'s fields are all `Optional = None`,
+documented as "Update the raw input", "Update the human-readable title". a2acode reads
+`raw_input` only on message 1 (where it is genuinely `{}`), and its `ToolCallProgress` branch
+(`acp.py:139-143`) never reads `raw_input` at all. **The arguments arrive on message 2 and are
+dropped on the floor.** Same root cause for `name=''`: `_tool_results` (`acp.py:269`) reads
+`update.title` on message 4, where it is absent because unchanged.
+
+**Root cause, and the framing that made the issue:** `events_from_update` has no memory of the
+previous message, deliberately and by documented design ("Pure and side-effect free so the
+translation can be unit tested without a live agent subprocess"). Correlating a refinement to
+the call it refines requires exactly that memory. A reasonable design choice meets a protocol
+it cannot express. **Note the vocabulary lesson:** the first draft leaned on the word "purity"
+as if it explained itself, and Josh asked what it meant. It doesn't explain itself, and the
+property that matters is narrower anyway ("no memory between calls"). Rewritten to say that;
+"pure" survives only inside their quoted docstring.
+
+**Fix shape (corrected):** merge before mapping. `session_update` already owns per-connection
+state, so it can keep a `toolCallId`→tool-call dict, fold each update into the remembered call,
+and hand `events_from_update` a complete view. The mapper is untouched and its tests don't
+move. Offered as a suggestion, since putting the state inside the mapper is also defensible.
+
+**Two things the capture found that the notes had backwards:**
+
+- **`tool_result.name` is masked, `tool_input` is not.** `executor.py:349`/`:358` stash tool
+  names by id and fall back to them, so the empty name never reaches an A2A client. The
+  arguments have no such fallback. Sizing the two symptoms equally was wrong.
+- **It is user-visible over A2A, worse than "a consumer rendering a timeline."**
+  `_describe_tool` (`executor.py:207-217`) reads `tool_input`, so a `Bash` call renders as
+  literally `$ ` with no command. And its comment ("ACP names a tool call with a human title
+  that often already says the path") is describing *message 2's* refined title, which a2acode
+  drops in favour of message 1's `Read File`. Someone wrote a fallback for exactly this and the
+  mapper never delivers it. That detail is the best evidence in the issue and no note had it.
+
+**Third claim dropped entirely.** "Tool names should be ids like `Read`, not labels like
+`Read File`" is not a bug: `title` is ACP's human-readable title by design, and `ToolCall`
+carries no underlying tool-name field for a2acode to prefer.
 
 ### A binary `PermissionDecision` flattens ACP's multi-option gates
 
