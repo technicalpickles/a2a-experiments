@@ -41,8 +41,9 @@ it's built and tested lives in "Development substrate," below.)
    core value: attention routing.
 6. **Watch and steer.** Glance at mid-flight work, interject in a session, redirect the
    orchestrator without killing anything.
-7. **Inspect the work product.** Per-checkout diffs, results, costs — see what the mission
-   actually produced and decide what moves forward.
+7. **Inspect the work product.** Browse the mission's checkouts — which repo, which
+   branch, where it lives on disk, what changed — with per-checkout diffs, results, and
+   costs. See what the mission actually produced and decide what moves forward.
 
 ## Domain model
 
@@ -50,9 +51,10 @@ it's built and tested lives in "Development substrate," below.)
 Catalog  (what's reachable: repo agents the cockpit can open sessions with)
 
 Mission  (emergent grouping of related coordinated work: its chats and its checkouts)
+├── Checkout           (a worktree of one repo, owned by the mission; where its agents work)
 ├── Orchestrator chat  (a conversation with the orchestrator agent; live or replay)
-│   └── Repo session   (an A2A conversation the orchestrator opens with one repo agent)
-└── Direct chat        (a conversation held straight with one repo agent — it IS a repo session)
+│   └── Repo session   (an A2A conversation with the agent on one of the mission's checkouts)
+└── Direct chat        (a conversation held straight with one checkout's agent — it IS a repo session)
 ```
 
 - **Catalog** — the set of repo agents the cockpit can reach. An entry resolves to a
@@ -71,10 +73,21 @@ Mission  (emergent grouping of related coordinated work: its chats and its check
   the orchestrator agent or one repo agent directly**. An orchestrator chat delegates
   (live: a real Claude Agent SDK session; replay: a recorded trace). A direct chat relays
   turns straight to a repo agent over A2A — no orchestrator, no SDK in the loop.
+- **Checkout** — a worktree of one repo, owned by one mission: created when the mission
+  first touches that repo (worktrunk's `~/worktrees/{repo}/{branch}` world is the obvious
+  mechanism), and the place that repo's agent actually works for this mission. **One
+  checkout per (mission, repo)** — so "send this to billing-api" is unambiguous inside a
+  mission — and the same repo appears in two missions via two different checkouts.
+  Addressing stays repo-shaped in conversation; the mission resolves it:
+  **(mission, repo) → checkout → endpoint**.
 - **Repo session** — an A2A conversation (a `contextId`, which a2acode serves multi-turn)
-  with one repo agent. In real use the agent sits on a **checkout** — a specific worktree —
-  so the same repo can appear in two missions via two different checkouts. The rig's fake
-  repos stand in for exactly that unit: a checkout with an agent on it.
+  with the agent on one of the mission's checkouts.
+
+**The rig conflates repo and checkout by construction** — fake agents have no filesystem,
+so the substrate's resolution chain collapses to repo → endpoint, and two missions talking
+to `billing-api` hit the same fake. That's contained: everything above the provider seam
+addresses (mission, repo), so checkout semantics slot in at `real-agents` without moving
+anything above them (see Risks).
 
 **A2A lives at exactly one seam: cockpit-side ↔ repo agent.** Every repo session is a real
 A2A client conversation. Today the counterparty is a fake; structurally it is identical to
@@ -183,19 +196,21 @@ cockpit exists, recording runs through a terminal chat REPL in `orch-record` —
 answer gates y/n.
 
 **Persistence:** SQLite, one file, no server. It tracks missions (title, repos touched),
-chats and their turns, repo sessions (`contextId`, checkout, status), pending gates, chat
-event logs, and the agent process registry (below) — because "resume a mission days later"
+checkouts (mission, repo, path, branch), chats and their turns, repo sessions
+(`contextId`, checkout, status), pending gates, chat event logs, and the agent process
+registry (below) — because "resume a mission days later"
 is a product use case, and an in-memory-only service can't serve it. Live SSE resume reads
 the same event log via `Last-Event-ID`. The database file lives outside git
 (`var/orchestrator.db`, gitignored); traces remain the durable, shareable form of a chat.
 
 **Agent process management:** repo sessions need a running A2A endpoint, and resolving one
 is a seam with two providers. The **index provider** points at already-running agents —
-the rig's `GET /` index; this is all the substrate needs. The **spawn provider** launches
-`a2acode serve --cwd <checkout>` on demand when a mission first touches a repo, tracks the
-process in the database (checkout, pid, port, health, last activity), reuses it across
-sessions, and reaps it when idle. Everything above the seam asks only "give me the
-endpoint for this catalog entry." The spawn provider is what makes the cockpit a real
+the rig's `GET /` index; this is all the substrate needs. The **spawn provider** resolves the full
+(mission, repo) → checkout → endpoint chain: on a mission's first touch of a repo it
+creates the mission's checkout (worktree), launches `a2acode serve --cwd <checkout>`,
+tracks the process in the database (checkout, pid, port, health, last activity), reuses it
+across sessions, and reaps it when idle. Everything above the seam asks only "give me the
+endpoint for this repo, in this mission." The spawn provider is what makes the cockpit a real
 daily driver; it lands in the `real-agents` follow-on, not the Phase 6 milestones.
 
 ### Trace format
@@ -296,6 +311,10 @@ one. The SSE stream feeds a single reducer; components render from that state:
 - **Mission list** — the front door: missions with a glanceable status (chats, repos
   touched, gates waiting, last activity). New-mission button is the fresh-start path;
   resume is clicking one.
+- **Checkout view** (within a mission) — the mission's worktrees: repo, branch, path,
+  what changed, which sessions worked there. The navigation home for "what did this
+  mission actually do to disk"; jump here from any repo session pane. (Against the rig
+  this view is thin — fake agents have no filesystem — and fills in at `real-agents`.)
 - **Chat sidebar** (within a mission) — its chats; open a new one with the orchestrator or
   directly with any catalog repo.
 - **Chat pane** — the conversation: user turns, narration, dispatches summarized inline.
@@ -380,6 +399,11 @@ exist at all.
 - **Product scope pulls toward daily-driver features** (persistence depth, mission
   lifecycle, multi-machine). The incubation boundary: build what the use cases above
   name, against the rig, and let real usage against real checkouts drive the rest.
+- **The substrate can't exercise checkout semantics.** The rig collapses
+  (mission, repo) → checkout → endpoint down to repo → endpoint, so worktree creation,
+  per-mission isolation, and the checkout view go untested until `real-agents`. Contained
+  by the provider seam owning the whole chain — and if it leaks anyway, the rig can grow
+  per-mission fake instances then.
 - **a2acode event-vocabulary evolution** hits the orchestrator's event stream and cockpit
   renderers the same way it hits the rig's scenarios; the same pinning-and-refresh
   tripwire covers both.
