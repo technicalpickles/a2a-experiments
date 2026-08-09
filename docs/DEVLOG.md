@@ -1428,3 +1428,59 @@ revised draft against the complete reference is clean.
 Two habits out of it, both now in UPSTREAM.md: **invoke `writing-voice` per issue, not once per
 session** (#38 invoked it, #39 and #40 coasted on context, #40 is where it showed), and
 **actually read the anti-tells reference** rather than the summary list.
+
+## 2026-08-08 — re-derived a2a-cli, then decided not to file it
+
+Picked up `cc7feef9` expecting the easy one: the migration was written 2026-08-06, verified
+then, and just needed a PR opened. Re-derived it anyway. Good thing.
+
+**The branch itself held up perfectly**, the first entry in this whole exercise where the notes
+overstated nothing. Upstream hasn't moved since the branch was cut, so it still applies cleanly.
+`tsc --noEmit` clean. Ran it end to end against a live a2acode echo server (card discovery,
+blocking send, streaming through to `completed [FINAL]`, `get`, `cancel` failing gracefully) and
+`input-required` against the playback repo. "Verified end-to-end" was accurate.
+
+**The premise underneath it was incomplete, though.** The commit message says `^0.3.4` "can't
+fetch an agent card built on the new supportedInterfaces shape". True, but that is the *second*
+failure and you never reach it normally. Reproducing on a worktree of `upstream/main`:
+
+1. `GET /` → **405**, because `A2AClient.fromCardUrl(serverUrl)` gets the base URL and a2acode's
+   root is POST-only JSON-RPC. Not version skew at all.
+2. Feed it the real card URL and you get the actual one: *"Provided Agent Card does not contain
+   a valid 'url' for the service endpoint."* That is the protocol change.
+3. Bonus, found by accident: upstream doesn't typecheck on a clean checkout. `^0.3.4` floats to
+   0.3.14 and the API moved inside the 0.3 line, so `npm install && npx tsc` gives 11 errors.
+   `tsc` emits anyway, which is why the CLI still runs and nobody noticed.
+
+A report claiming only the shape problem would have had a maintainer pass the base URL, see a
+405, and reasonably conclude we were wrong.
+
+**Josh's question sharpened it further:** is this just a version thing? Yes, but across three
+axes that are easy to conflate (A2A protocol 0.x→1.0, `@a2a-js/sdk` 0.3.14→1.0.1, `a2a-sdk`
+0.3.x→1.1.2, plus a2acode's own unrelated 0.6.2). Only the protocol axis is the real story.
+Confirmed it is protocol-level rather than an a2acode quirk: `@a2a-js/sdk` 1.0.1's own
+`AgentCard` declares `supportedInterfaces` as **required**, so the JS and Python 1.x SDKs agree
+across languages, and a2a-inspector hits the identical wall from its own 0.3.10 pin. Two
+unrelated clients, same break.
+
+That also showed the draft was structured wrong: it led with the 405 because that's the order
+you encounter things, which buries the finding a skimming maintainer needs.
+
+**Then we didn't file it.** `ericabouaf/a2a-cli` was created and abandoned inside a 35-minute
+window on 2025-11-08, and nine months later has 1 star, 1 fork (ours), zero issues and zero PRs
+ever. A cold 200-line PR into that is a lot of ceremony for something unlikely to be read, and
+the fork already works locally so nothing is blocked. Josh called it, and it's the right call.
+
+Everything is preserved in UPSTREAM.md's a2a-cli entry rather than left in `scratch/`: all three
+failures, the version table, the framing note about leading with #2, and the reproduction recipe.
+The draft issue stays in `scratch/` and the task is annotated rather than closed.
+
+**Worth naming as a pattern:** re-deriving was worth it even though we filed nothing. It caught
+that the premise was incomplete, produced a version breakdown neither of us had straight, and
+turned "just open the PR" into a documented decision. The output of a re-derivation isn't always
+an issue; sometimes it's a better-informed no.
+
+Cleanup: killed a stray `rig-serve` on 9310 left running from a prior session, plus an echo
+server on 9317 that survived a first `kill` and needed `-9`, and removed the temp worktree.
+
+Rig untouched. Suite still 165 passed / 4 xfailed. Taskwarrior at 15 pending.

@@ -514,13 +514,68 @@ that we've been using a2acode seriously, which is a better opening than a cold f
 
 ### Migrate the client to `@a2a-js/sdk` 1.0.1
 
-**Task:** `cc7feef9` · **Work is done, sitting in a fork**
+**Task:** `cc7feef9` · **Work is done, sitting in a fork.** **Decision 2026-08-08: not filing,
+for now.** Re-derived in full first, so if we change our minds everything needed is below and
+nothing has to be rediscovered.
 
 Patched on `a2a-sdk-1.0-migration` in `~/github.com/technicalpickles/a2a-cli`, `npm link`ed
 locally. Upstream's npm metadata has no `repository` field, which is why this went fork-first
 rather than issue-first — there was no obvious repo to file against from the package alone.
+(Their own history has `1d3fc44 Remove repo ?`, so the absence was deliberate, not an oversight.)
 
-Just needs the PR opened.
+**Why we stopped short of filing.** `ericabouaf/a2a-cli` was created and abandoned inside a
+35-minute window on 2025-11-08 (`createdAt` and `pushedAt` are both that day), and nine months
+on it has 1 star, 1 fork (ours), **zero issues and zero PRs, ever**. A cold 200-line PR into
+that is a lot of ceremony for something unlikely to be read. Josh's call, and the fork already
+works locally so nothing is blocked. A draft issue is at `scratch/issue-a2a-cli.md` if it's
+ever wanted.
+
+**Re-derivation (2026-08-08) verified the branch and corrected the story.** Everything the
+commit message claimed is true; it was also incomplete in a way that would have made a filed
+report look wrong.
+
+Branch state: one commit on top of `upstream/main` (`c3bfa17`), zero behind — upstream has not
+moved since 2026-08-06, so it still applies cleanly. `tsc --noEmit` clean. Verified end to end
+against a live a2acode echo server (card discovery, blocking send, streaming `-w` through to
+`completed [FINAL]`, `get`, `cancel` failing gracefully with `TASK_NOT_CANCELABLE`) and
+`input-required` against the playback repo via `30-refactor.yaml`'s gate.
+
+**There are three distinct failures, not one, and they sit on three different version axes:**
+
+| axis | old | current | what changed |
+|---|---|---|---|
+| A2A protocol | 0.x | 1.0 | endpoint moved from a top-level `url` to `supportedInterfaces[]` |
+| `@a2a-js/sdk` (JS, client) | 0.3.14 | 1.0.1 | client API restructured; a2a-cli pins `^0.3.4` |
+| `a2a-sdk` (Python, server) | 0.3.x | 1.1.2 | what a2acode pins |
+
+(a2acode's own `v0.6.2` is a fourth, unrelated number. Easy to conflate all four.)
+
+1. **`GET /` → 405 Method Not Allowed**, which is what you actually hit first.
+   `initializeClient` calls `A2AClient.fromCardUrl(serverUrl)` with the *base* URL, so 0.3.x
+   fetches `/` and looks for a card there; a2acode's `/` is JSON-RPC and is POST-only. **This is
+   not version skew** — it is independent of protocol version, and 1.x only papers over it
+   because `ClientFactory.createFromUrl` does well-known discovery. Whether it ever worked
+   against their default server is unknown, so don't call it a bug in any report.
+2. **The card shape, which is the real interop break.** Given the actual card URL, 0.3.14 fails
+   with `Provided Agent Card does not contain a valid 'url' for the service endpoint.` **This is
+   protocol-level, confirmed**: `@a2a-js/sdk` 1.0.1's own `AgentCard` type declares
+   `supportedInterfaces: AgentInterface[]` as *required*, so the JS and Python 1.x SDKs agree on
+   the shape across languages. a2a-inspector hits the identical wall from its Python 0.3.10 pin
+   — two unrelated clients, same break. a2a-cli is simply a pre-1.0 protocol client.
+3. **Upstream doesn't typecheck on a clean checkout.** `^0.3.4` floats to 0.3.14 today and the
+   client API moved *within* the 0.3 line: `npm install && npx tsc` gives 11 errors across
+   `send.ts`, `get.ts`, `cancel.ts`. `tsc` still emits, so the CLI runs, which is why nobody
+   noticed. Pure library skew, nothing to do with the protocol.
+
+**Framing note if this is ever written up:** lead with #2. Findings #1 and #3 are what you
+*encounter*, but a maintainer skimming a report that opens on the 405 takes away "I'm calling
+the wrong URL" rather than "the protocol moved under me." The draft in `scratch/` currently
+leads with #1 and would need restructuring.
+
+**Reproduction method, since it took some setup:** `git worktree add <tmp> upstream/main`,
+`npm install` (gets 0.3.14), `npx tsc` for finding #3, then run `node dist/cli.js -s <url>`
+against `a2acode serve --backend echo` for #1 and again with the explicit
+`/.well-known/agent-card.json` URL for #2.
 
 ---
 
@@ -567,7 +622,10 @@ Noted here so the decision not to file is a decision rather than an oversight.
    bundling it with a "is this deliberate?" nit would bury the one item that has evidence
    attached. **That instinct was right twice now** — it's the same call that split `f010f63e`
    from `438d9c1c`, so treat "does bundling bury the one with evidence?" as the standing test.
-4. **`cc7feef9` to a2a-cli** any time. The work already exists.
+4. ~~**`cc7feef9` to a2a-cli** any time. The work already exists.~~ **Not filing, 2026-08-08.**
+   The work does exist and was re-derived and re-verified in full, but `ericabouaf/a2a-cli` has
+   been untouched for nine months with zero issues and zero PRs ever. Findings preserved in the
+   entry above; a draft issue sits in `scratch/`. Revisit if the repo shows a pulse.
 
 **`70dc7c04` jumped the queue and is filed** ([a2acode#37](https://github.com/kanywst/a2acode/issues/37),
 2026-08-08). It was the only plain feature-is-broken report rather than a design conversation:
