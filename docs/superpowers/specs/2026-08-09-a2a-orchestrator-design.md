@@ -10,7 +10,7 @@ the cockpit (a React web UI) is the frontend half.
 
 The **multi-repo rig is the development substrate**, not the product: the cockpit is built
 and tested against the rig's fake repo agents (deterministic, millisecond turns, zero
-inference), and pointed at real `a2acode serve --cwd <checkout>` instances when it's being
+inference), and pointed at real `a2acode serve --cwd <worktree>` instances when it's being
 *used* rather than *built*. Nothing above the A2A seam can tell the difference — that is
 the rig's founding bet, made load-bearing here.
 
@@ -27,7 +27,7 @@ it's built and tested lives in "Development substrate," below.)
 
 1. **Start fresh.** Walk into the cockpit, hit new, describe the thing — a Jira ticket
    just picked up, an idea worth exploring. No repo selection, no setup. The orchestrator
-   works out which repos matter (or asks), checkouts get pulled in as needed, and a
+   works out which repos matter (or asks), worktrees get pulled in as needed, and a
    mission forms around the conversation — auto-titled, renamable.
 2. **Resume a mission.** Come back hours or days later, see the missions, open one, catch
    up: what finished, what's blocked waiting on an answer, what failed. Pick the
@@ -41,29 +41,33 @@ it's built and tested lives in "Development substrate," below.)
    core value: attention routing.
 6. **Watch and steer.** Glance at mid-flight work, interject in a session, redirect the
    orchestrator without killing anything.
-7. **Inspect the work product.** Browse the mission's checkouts — which repo, which
-   branch, where it lives on disk, what changed — with per-checkout diffs, results, and
+7. **Inspect the work product.** Browse the mission's worktrees — which repo, which
+   branch, where it lives on disk, what changed — with per-worktree diffs, results, and
    costs. See what the mission actually produced and decide what moves forward.
 
 ## Domain model
 
 ```
-Catalog  (what's reachable: repo agents the cockpit can open sessions with)
+Catalog  (what's reachable: the repositories the cockpit knows, and how their agents run)
+└── Repository  (a codebase: name, canonical clone, agent endpoint or spawn recipe)
 
-Mission  (emergent grouping of related coordinated work: its chats and its checkouts)
-├── Checkout           (a worktree of one repo, owned by the mission; where its agents work)
+Mission  (emergent grouping of related coordinated work: its chats and its worktrees)
+├── Worktree           (a working tree of one repository, owned by the mission; where its agents work)
 ├── Orchestrator chat  (a conversation with the orchestrator agent; live or replay)
-│   └── Repo session   (an A2A conversation with the agent on one of the mission's checkouts)
-└── Direct chat        (a conversation held straight with one checkout's agent — it IS a repo session)
+│   └── Repo session   (an A2A conversation with the agent on one of the mission's worktrees)
+└── Direct chat        (a conversation held straight with one worktree's agent — it IS a repo session)
 ```
 
-- **Catalog** — the set of repo agents the cockpit can reach. An entry resolves to a
-  running A2A endpoint through a provider: today the rig's index (`GET /`, agents already
-  running); later a spawn provider that launches and supervises a2acode per checkout
-  ("Agent process management," below). Configuration points at the catalog; everything
-  else is runtime.
+- **Catalog** — the registry of repositories the cockpit can reach. Configuration points
+  at the catalog; everything else is runtime.
+- **Repository** — a codebase the cockpit knows: a name, where its canonical clone lives,
+  and how agents for it run — resolved through a provider: today the rig's index
+  (`GET /`, an agent already running per fake repo); later a spawn recipe that launches
+  and supervises a2acode per worktree ("Agent process management," below). Repositories
+  are shared across missions and carry no mission state; a mission's view of a repository
+  is its worktree.
 - **Mission** — the unit of grouping: one piece of related work being coordinated — a
-  ticket, an exploration — holding the chats it accumulated and the checkouts it touched.
+  ticket, an exploration — holding the chats it accumulated and the worktrees it touched.
   **Missions are emergent, not predeclared:** created by starting one, never by editing
   config; repos join a mission by being used in it. Missions carry no priority, urgency,
   or importance — they are coordination contexts, not backlog items (taskwarrior remains
@@ -73,26 +77,28 @@ Mission  (emergent grouping of related coordinated work: its chats and its check
   the orchestrator agent or one repo agent directly**. An orchestrator chat delegates
   (live: a real Claude Agent SDK session; replay: a recorded trace). A direct chat relays
   turns straight to a repo agent over A2A — no orchestrator, no SDK in the loop.
-- **Checkout** — a worktree of one repo, owned by one mission: created when the mission
-  first touches that repo (worktrunk's `~/worktrees/{repo}/{branch}` world is the obvious
-  mechanism), and the place that repo's agents actually work for this mission. **One
-  checkout per (mission, repo)** — so "send this to billing-api" is unambiguous inside a
-  mission — and the same repo appears in two missions via two different checkouts.
+- **Worktree** — a working tree of one repository, owned by one mission: created when the
+  mission first touches that repo (worktrunk's `~/worktrees/{repo}/{branch}` world is the
+  obvious mechanism), and the place that repo's agents actually work for this mission.
+  Worktree is git's own term — the main clone's working directory is itself the "main
+  worktree" — so it covers every case a vaguer word like "checkout" would. **One
+  worktree per (mission, repo)** — so "send this to billing-api" is unambiguous inside a
+  mission — and the same repo appears in two missions via two different worktrees.
   Addressing stays repo-shaped in conversation; the mission resolves it:
-  **(mission, repo) → checkout → endpoint**. A checkout can host several sessions at
+  **(mission, repo) → worktree → endpoint**. A worktree can host several sessions at
   once, but **one writer at a time** — an advisory lease, below.
 - **Repo session** — an A2A conversation (a `contextId`, which a2acode serves multi-turn)
-  with the agent on one of the mission's checkouts.
+  with the agent on one of the mission's worktrees.
 
-**The rig conflates repo and checkout by construction** — fake agents have no filesystem,
+**The rig conflates repo and worktree by construction** — fake agents have no filesystem,
 so the substrate's resolution chain collapses to repo → endpoint, and two missions talking
 to `billing-api` hit the same fake. That's contained: everything above the provider seam
-addresses (mission, repo), so checkout semantics slot in at `real-agents` without moving
+addresses (mission, repo), so worktree semantics slot in at `real-agents` without moving
 anything above them (see Risks).
 
 **A2A lives at exactly one seam: cockpit-side ↔ repo agent.** Every repo session is a real
 A2A client conversation. Today the counterparty is a fake; structurally it is identical to
-a real a2acode on a checkout. Everything above the seam — frontend, API, chats, missions —
+a real a2acode on a worktree. Everything above the seam — frontend, API, chats, missions —
 cannot tell the difference, which is what makes "swap the rig for the real thing" a
 configuration change (point the catalog somewhere else), not a code change.
 
@@ -197,8 +203,8 @@ cockpit exists, recording runs through a terminal chat REPL in `orch-record` —
 answer gates y/n.
 
 **Persistence:** SQLite, one file, no server. It tracks missions (title, repos touched),
-checkouts (mission, repo, path, branch), chats and their turns, repo sessions
-(`contextId`, checkout, status), pending gates, chat event logs, and the agent process
+worktrees (mission, repo, path, branch), chats and their turns, repo sessions
+(`contextId`, worktree, status), pending gates, chat event logs, and the agent process
 registry (below) — because "resume a mission days later"
 is a product use case, and an in-memory-only service can't serve it. Live SSE resume reads
 the same event log via `Last-Event-ID`. The database file lives outside git
@@ -207,31 +213,31 @@ the same event log via `Last-Event-ID`. The database file lives outside git
 **Agent process management:** repo sessions need a running A2A endpoint, and resolving one
 is a seam with two providers. The **index provider** points at already-running agents —
 the rig's `GET /` index; this is all the substrate needs. The **spawn provider** resolves the full
-(mission, repo) → checkout → endpoint chain: on a mission's first touch of a repo it
-creates the mission's checkout (worktree), launches `a2acode serve --cwd <checkout>`,
-tracks the process in the database (checkout, pid, port, health, last activity), reuses it
+(mission, repo) → worktree → endpoint chain: on a mission's first touch of a repo it
+creates the mission's worktree, launches `a2acode serve --cwd <worktree>`,
+tracks the process in the database (worktree, pid, port, health, last activity), reuses it
 across sessions, and reaps it when idle. Everything above the seam asks only "give me the
 endpoint for this repo, in this mission." The spawn provider is what makes the cockpit a real
 daily driver; it lands in the `real-agents` follow-on, not the Phase 6 milestones.
 
 **Agents in a worktree — cardinality and the writer lease.** An a2acode process serves one
-`--cwd`, so agent-process ↔ checkout starts 1:1 — but a checkout may host **multiple
+`--cwd`, so agent-process ↔ worktree starts 1:1 — but a worktree may host **multiple
 concurrent sessions** (a reviewer reading while the builder writes, a Q&A session
 answering questions mid-flight), whether multiplexed through one process or spread across
-several on the same checkout. The invariant is **one writer per checkout**: the service —
-which owns every dispatch — tracks an advisory write lease per checkout; one session holds
+several on the same worktree. The invariant is **one writer per worktree**: the service —
+which owns every dispatch — tracks an advisory write lease per worktree; one session holds
 it, the rest run read-shaped work concurrently. *Advisory* means it is not enforced by the
 filesystem: sessions declare intent at dispatch, the lease gates who may mutate, and
 permission gates are the backstop when a "reader" reaches for a write-shaped tool. The
 declaration and enforcement mechanism is deliberately TBD (see Open questions).
-Parallel *writing* comes from more checkouts, not more writers on one.
+Parallel *writing* comes from more worktrees, not more writers on one.
 
 **Agent scope.** Git worktrees share `.git` with the main clone, so an agent inherently
 sees its *repo* — full history, all branches and refs. That is a feature (diff against
 main, read another branch). What it must not touch is other *working trees*: the main
 clone's and other missions'. Enforcement there is **policy, not sandbox** — the agent can
 technically wander — so the practical controls are permission gates (a `Read` outside the
-checkout is visible and deniable) plus whatever sandbox config the spawn provider sets.
+worktree is visible and deniable) plus whatever sandbox config the spawn provider sets.
 Said plainly here so the spec doesn't imply isolation it doesn't have.
 
 ### Trace format
@@ -332,7 +338,7 @@ one. The SSE stream feeds a single reducer; components render from that state:
 - **Mission list** — the front door: missions with a glanceable status (chats, repos
   touched, gates waiting, last activity). New-mission button is the fresh-start path;
   resume is clicking one.
-- **Checkout view** (within a mission) — the mission's worktrees: repo, branch, path,
+- **Worktree view** (within a mission) — the mission's worktrees: repo, branch, path,
   what changed, which sessions worked there. The navigation home for "what did this
   mission actually do to disk"; jump here from any repo session pane. (Against the rig
   this view is thin — fake agents have no filesystem — and fills in at `real-agents`.)
@@ -398,8 +404,8 @@ exist at all.
 - **`e2e-suite`** — Playwright green, zero inference; PLAN.md Phase 6 bullet checked;
   this spec's decisions graduate to DESIGN-v3.
 - **`real-agents`** *(follow-on, beyond Phase 6's exit)* — the spawn provider: launch and
-  supervise a2acode per checkout, process registry in the database, idle reaping;
-  worktrunk integration for checkout creation decided here. This is where the cockpit
+  supervise a2acode per worktree, process registry in the database, idle reaping;
+  worktrunk integration for worktree creation decided here. This is where the cockpit
   stops being a demo and starts being the daily driver.
 
 ## Risks
@@ -419,10 +425,10 @@ exist at all.
   it.
 - **Product scope pulls toward daily-driver features** (persistence depth, mission
   lifecycle, multi-machine). The incubation boundary: build what the use cases above
-  name, against the rig, and let real usage against real checkouts drive the rest.
-- **The substrate can't exercise checkout semantics.** The rig collapses
-  (mission, repo) → checkout → endpoint down to repo → endpoint, so worktree creation,
-  per-mission isolation, and the checkout view go untested until `real-agents`. Contained
+  name, against the rig, and let real usage against real worktrees drive the rest.
+- **The substrate can't exercise worktree semantics.** The rig collapses
+  (mission, repo) → worktree → endpoint down to repo → endpoint, so worktree creation,
+  per-mission isolation, and the worktree view go untested until `real-agents`. Contained
   by the provider seam owning the whole chain — and if it leaks anyway, the rig can grow
   per-mission fake instances then.
 - **a2acode event-vocabulary evolution** hits the orchestrator's event stream and cockpit
@@ -435,16 +441,16 @@ exist at all.
   organization if mission count grows.
 - **Auto-titling missions** — suggested from the first exchange; mechanism (model-derived
   vs. heuristic) decided when live chats exist.
-- **Checkout management in real use** — who creates/owns the worktrees real repo agents
+- **Worktree management in real use** — who creates/owns the worktrees real repo agents
   sit on (worktrunk integration is the obvious candidate). Deferred to the `real-agents`
   milestone, alongside the spawn provider it belongs to.
 - **The writer-lease mechanism** — how a session declares read vs. write intent at
   dispatch, what happens when a reader turns out to need the lease (queue? escalate?
   fail?), and whether enforcement grows past advisory. Model is settled (one writer, N
-  readers, per checkout); mechanism decided at `real-agents`.
+  readers, per worktree); mechanism decided at `real-agents`.
 - **Does a2acode serialize concurrent tasks in one process?** Unknown; determines whether
-  multi-session-per-checkout multiplexes through one process or takes a process per
+  multi-session-per-worktree multiplexes through one process or takes a process per
   session. Probe when `real-agents` starts — possibly upstream-shaped, given this repo's
   track record.
-- **N checkouts per (mission, repo)** — if a mission ever genuinely wants two parallel
+- **N worktrees per (mission, repo)** — if a mission ever genuinely wants two parallel
   writing workstreams in one repo. Serialize-by-default until a real mission demands it.
