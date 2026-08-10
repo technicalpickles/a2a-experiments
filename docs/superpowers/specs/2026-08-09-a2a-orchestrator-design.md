@@ -1,18 +1,24 @@
 # a2a-orchestrator: the cockpit and its orchestrator
 
-**Date:** 2026-08-09 · **Phase:** 6, final bullet (PLAN.md) · **Task:** taskwarrior `9b3c2a04`
+**Date:** 2026-08-09 · **Task:** taskwarrior `9b3c2a04` · **Provenance:** the one unchecked
+bullet of `docs/PLAN.md` "Phase 6 — M2: multi-repo rig + your consumers" ("Start building
+the frontend and agents against this"), which is milestone M2's consumer half in
+DESIGN-v3 §8
 
 A **cockpit for coordinating agent work across repos**: you chat with an orchestrator agent
 about a piece of related work, it farms tasks out to per-repo coding agents over A2A, and
-you watch the sessions stream side by side, answer their permission gates, and steer — from
+you watch the sessions stream side by side, answer their approval requests, and steer — from
 one place instead of N terminals. The orchestrator is the agent half of the deliverable;
 the cockpit (a React web UI) is the frontend half.
 
-The **multi-repo rig is the development substrate**, not the product: the cockpit is built
-and tested against the rig's fake repo agents (deterministic, millisecond turns, zero
-inference), and pointed at real `a2acode serve --cwd <worktree>` instances when it's being
-*used* rather than *built*. Nothing above the A2A seam can tell the difference — that is
-the rig's founding bet, made load-bearing here.
+The development substrate is **`a2a-rig`** — the multi-repo dev rig built in Phases 3–7,
+a sibling directory in this repo, called "the rig" below. The cockpit does **not** live
+inside it: `a2a-orchestrator/` is its own top-level project that talks to a2a-rig's fake
+repo agents over HTTP exactly as it would talk to real ones. It is built and tested
+against those fakes (deterministic, millisecond turns, zero inference), and pointed at
+real `a2acode serve --cwd <worktree>` instances when it's being *used* rather than
+*built*. Nothing above the A2A seam can tell the difference — a2a-rig's founding bet,
+made load-bearing here.
 
 This spec settles the questions Phase 6's bullet opens. Its architectural decisions
 graduate into DESIGN-v3 once implemented, per this repo's convention that DESIGN-v3 is the
@@ -36,7 +42,7 @@ it's built and tested lives in "Development substrate," below.)
    per-repo agents in parallel; the sessions stream side by side and the work converges.
 4. **Talk to one repo directly.** Skip the orchestrator for a quick fix or a poke-around —
    open a session straight with one repo's agent inside the mission.
-5. **Gate triage.** Several sessions in flight; permission gates surface in one place as
+5. **Approval triage.** Several sessions in flight; approval requests surface in one place as
    they arrive; answer them from the cockpit instead of chasing terminals. Arguably the
    core value: attention routing.
 6. **Watch and steer.** Glance at mid-flight work, interject in a session, redirect the
@@ -75,7 +81,7 @@ Mission  (emergent grouping of related coordinated work: its chats and its workt
   question deliberately deferred.
 - **Chat** — one multi-turn conversation inside a mission, whose **counterparty is either
   the orchestrator agent or one repo agent directly**. An orchestrator chat delegates
-  (live: a real Claude Agent SDK session; replay: a recorded trace). A direct chat relays
+  (live: a real Claude Agent SDK session; replay: a recording). A direct chat relays
   turns straight to a repo agent over A2A — no orchestrator, no SDK in the loop.
 - **Worktree** — a working tree of one repository, owned by one mission: created when the
   mission first touches that repo (worktrunk's `~/worktrees/{repo}/{branch}` world is the
@@ -89,6 +95,11 @@ Mission  (emergent grouping of related coordinated work: its chats and its workt
   once, but **one writer at a time** — an advisory lease, below.
 - **Repo session** — an A2A conversation (a `contextId`, which a2acode serves multi-turn)
   with the agent on one of the mission's worktrees.
+- **Recording** — the replayable YAML capture of one chat: the user's turns, the
+  orchestrator's visible narration, its dispatches, the approval answers. New in this
+  spec — the rig's recorded *scenarios* script what a repo agent says; a recording
+  captures what a conversation did, one level up. A replay chat is a recording played
+  back.
 
 **The rig conflates repo and worktree by construction** — fake agents have no filesystem,
 so the substrate's resolution chain collapses to repo → endpoint, and two missions talking
@@ -109,40 +120,42 @@ In the order they were made during brainstorming:
 - **One system, both halves.** Orchestrator and cockpit designed together — the
   orchestrator's API is the interface between them.
 - **The orchestrator is a conversational agent, live-drivable, and live chats record.** A
-  real Claude Agent SDK loop decides sequencing when live; replay walks a recorded trace
+  real Claude Agent SDK loop decides sequencing when live; replay walks a recording
   with zero inference. The rig's `RecordingBackend` philosophy applied one level up — and
   per the Phase 7 lesson (recordings corrected hand-imagined assumptions twice),
-  **recording ships before replay**, so the trace format is grounded in real output.
-- **Recording captures the trace, not the transcript.** User turns, visible narration,
-  dispatches, gate answers — not the raw SDK session. Replay needs no model mock.
-- **The orchestrator core speaks a2acode's event vocabulary.** Narration is `text`, a
-  dispatch is tool-call-shaped, a relayed gate is a `permission`, a turn ends in `result`.
-  Chat pane and repo panes share one set of renderers; a recorded chat is structurally a
-  scenario one level up; and an orchestrator that speaks `BackendEvent` could later be
-  mounted as an a2acode backend — a true A2A agent, upstreamable like `playback` — without
-  building that now.
+  **recording ships before replay**, so the recording format is grounded in real output.
+- **A recording captures the conversation's shape, not the transcript.** User turns,
+  visible narration, dispatches, approval answers — not the raw SDK session. Replay needs
+  no model mock.
+- **The wire is A2A; a2acode is an implementation choice, confined to two places.**
+  First: the orchestrator has to *be* an A2A agent, and rather than hand-writing a
+  server, it reuses a2acode's server library — one `Backend` interface implemented twice
+  (live and replay), which a2acode turns into a real card, task state machine, streams,
+  and `input-required` handling. That's a build-vs-borrow call behind a standard surface,
+  swappable without touching anything else. Second: the cockpit's *rich* rendering keys
+  on the event shapes a2acode agents emit (plans, tool activity, diffs); any other agent
+  that surfaces as A2A is still a valid counterparty through the same panes, with generic
+  message/artifact rendering. Nothing else in the system knows a2acode exists.
 - **The cockpit is a web UI** (Vite + React + TS). Rich interactions — live multi-pane
-  streams, diff rendering, gate cards — were the priority; a TUI or server-rendered UI
+  streams, diff rendering, approval cards — were the priority; a TUI or server-rendered UI
   fights that grain, and Playwright drives a browser first-class.
-- **The browser speaks A2A for conversation, REST for management** (this reversed an
-  earlier draft's "the frontend never speaks A2A"). Chats map onto A2A almost verbatim —
-  a chat is a `contextId`, turns are messages, gates are `input-required` — so a bespoke
+- **The browser speaks A2A for conversation, REST for management.** Chats map onto A2A
+  almost verbatim —
+  a chat is a `contextId`, turns are messages, approvals are `input-required` — so a bespoke
   chat API would have shadowed A2A with a homemade protocol, the exact drift this project
   exists to prevent. The browser holds a real A2A client; the service is a
   **contextId-routed pass-through proxy** (one A2A endpoint; each conversation's
   contextId is bound to its counterparty — orchestrator or a repo agent — when the chat
   opens). The proxy relays without translating, and the relay is the observation point:
-  session tracking, recording, the gate inbox. What doesn't map — missions, worktrees,
-  catalog, traces, pacing — is resource CRUD and stays REST. Side effect worth naming: a
+  session tracking, recording, the approval inbox. What doesn't map — missions, worktrees,
+  catalog, recordings, pacing — is resource CRUD and stays REST. Side effect worth naming: a
   working browser A2A client UI is a thing the ecosystem visibly lacks (a2a-inspector is
-  broken, and we know exactly how).
-- **The orchestrator mounts as an a2acode backend from day one.** Its A2A surface —
-  card, task state machine, streaming, `input-required` — is a2acode's real server, the
-  rig's own can't-drift guarantee applied to our own API. Live and replay are both
-  `Backend` implementations, mirroring the rig's swappable-backend pattern one level up.
-- **Missions are emergent** (this reversed an earlier draft's predeclared `projects.yaml`):
-  the fresh-start use case doesn't survive upfront repo selection, so config shrank to the
-  catalog and the grouping became runtime state.
+  broken, and we know exactly how). Surveyed 2026-08-09: A2A gateways and bridges exist
+  (an OpenClaw A2A gateway, MCP↔A2A gateways, the awesome-a2a lists) but nothing shaped
+  like a browser-facing pass-through proxy — ours stays bespoke and small (the working
+  prototype was ~40 lines of Starlette).
+- **Missions are emergent.** The fresh-start use case doesn't survive upfront repo
+  selection, so config shrank to the catalog and the grouping became runtime state.
 - **Exit is demo + tests.** Working cockpit against the rig, pytest for the service,
   Playwright e2e — automated paths zero-inference.
 
@@ -153,7 +166,7 @@ Product use cases above assume real repo agents; these are the *builder's* use c
 
 - **Deterministic dev loop.** Iterate on a React renderer while the same recorded chat
   replays identically in milliseconds on every reload — deep links
-  (`?mission=&trace=&pacing=headless&autostart=1`) make it zero-click under Vite hot
+  (`?mission=&recording=&pacing=headless&autostart=1`) make it zero-click under Vite hot
   reload.
 - **Automated regression.** pytest and Playwright at `headless` pacing against the rig:
   zero inference, CI-able. Direct chats against `playback` are live *and* deterministic
@@ -162,7 +175,7 @@ Product use cases above assume real repo agents; these are the *builder's* use c
   default play fails) pins how failed dispatches and failed turns render.
 - **Legible demos.** `demo` pacing replays a recorded chat hands-free with dwells at each
   human action, for showing another person what the cockpit does.
-- **Recorded traces as fixtures.** Live chats recorded against the rig become the replay
+- **Recordings as fixtures.** Live chats recorded against the rig become the replay
   library — scrubbed, checked in, covering an allow path, a deny path, and a failure.
 
 ## Layout
@@ -171,10 +184,11 @@ Product use cases above assume real repo agents; these are the *builder's* use c
 a2a-orchestrator/
   pyproject.toml               # uv project, mirrors a2a-rig conventions
   src/a2a_orchestrator/        # service: orchestrator core, API, recorder, replay
+                               #   CLIs: orch-serve (the service), orch-record (terminal recorder)
   frontend/                    # the cockpit: Vite + React + TS
     e2e/                       # Playwright (same toolchain as the frontend)
   catalog.yaml                 # where the repo agents are (rig index URL today)
-  traces/                      # recorded chats, scrubbed, checked in
+  recordings/                      # recorded chats, scrubbed, checked in
   var/                         # runtime state: orchestrator.db (gitignored)
   tests/                       # pytest
   README.md                    # self-contained, like a2a-rig's
@@ -188,11 +202,37 @@ Default ports: rig at 9200 (existing convention), orchestrator service at 9300.
 
 ## The orchestrator agent
 
-`orch-serve` hosts everything: one process, many missions and chats, the way the rig is one
-process, many repos. **The orchestrator is served by a2acode's own machinery, mounted
-in-process** — its card, task state machine, streaming, and `input-required` handling come
-from the real server, and its two brains are `Backend` implementations, the rig's
-swappable-backend pattern one level up:
+`orch-serve` (the service CLI, listed in Layout) hosts everything: one process, many
+missions and chats, the way the rig is one process, many repos. **The orchestrator is
+itself an A2A agent** — the same protocol surface the repo agents present, which is what
+lets the browser's one A2A client talk to either kind of counterparty. It's served
+in-process by a2acode's machinery (the build-vs-borrow call in Decisions), behind one
+`Backend` interface with two interchangeable implementations — live and replay:
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (cockpit)
+    participant S as Service (proxy + REST)
+    participant O as Orchestrator agent
+    participant R as Repo agent (billing-api)
+    B->>S: POST /api/missions/{m}/chats {agent: orchestrator}
+    S-->>B: contextId
+    B->>S: A2A message (contextId, "add a health endpoint")
+    S->>O: relay (contextId → orchestrator)
+    O->>R: dispatch: A2A message (repo session)
+    R-->>O: stream: plan, tool events, diff…
+    R-->>O: input-required (approval request)
+    O-->>S: input-required (propagated up)
+    S-->>B: stream: task paused → approval card
+    B->>S: A2A message (approval answer)
+    S->>O: relay
+    O->>R: answer (repo session resumes)
+    R-->>O: stream: … → completed
+    O-->>B: narration, turn result
+```
+
+(The repo pane meanwhile holds its own `tasks/resubscribe` subscription to the repo
+session, through the same proxy — omitted above for legibility.)
 
 **Live orchestrator chats** each run one Claude Agent SDK session inside the process. Its
 tools read the catalog (`list_repos()`) and open or continue repo sessions
@@ -200,33 +240,37 @@ tools read the catalog (`list_repos()`) and open or continue repo sessions
 terminal). The model decides which repos to involve, what to ask, in what order; parallel
 dispatch falls out of the model issuing multiple `send_to_repo` calls in one turn;
 multi-turn chat is the SDK session continuing. Repos the chat touches join its mission.
-**Gates never route to the model.** When a repo session parks in `input-required`, the
-orchestrator parks its own task `input-required` in turn — the gate propagates up the A2A
+**Approvals never route to the model.** When a repo session parks in `input-required`, the
+orchestrator parks its own task `input-required` in turn — the approval propagates up the A2A
 chain to the browser as protocol, not as a bespoke event — and the human's answer flows
-back down the same way. Gate decisions are human decisions, and they are what gets
+back down the same way. Approval decisions are human decisions, and they are what gets
 recorded.
 
-**Replay chats** walk a trace: emit the recorded narration, dispatch each recorded step to
-its repo, pause at recorded user turns and gates per the pacing mode. No inference, no SDK,
+**Replay chats** walk a recording: emit the recorded narration, dispatch each recorded step to
+its repo, pause at recorded user turns and approvals per the pacing mode. No inference, no SDK,
 millisecond turns. A repo task failing marks the turn failed and skips its remaining steps.
 
-**Direct chats** need neither brain, and don't even touch the orchestrator agent: the
+**Direct chats** need neither implementation, and don't touch the orchestrator agent at
+all: the
 browser's A2A client talks to the repo agent through the contextId-routed proxy, which
 relays unmodified and observes. Recording a direct chat captures only the user's turns and
-gate answers — the repo side is already scripted (rig) or real (production) — so replaying
+approval answers — the repo side is already scripted (rig) or real (production) — so replaying
 one is a convenience, not a necessity.
 
-**The recorder** tees live chats into `traces/*.yaml`, scrubbed like Phase 7's recordings:
+**The recorder** tees live chats into `recordings/*.yaml`, scrubbed like Phase 7's recordings:
 shape kept, volatile identifiers (session ids, costs) dropped or rounded. Before the
 cockpit exists, recording runs through a terminal chat REPL in `orch-record` — type turns,
-answer gates y/n.
+answer approvals y/n.
 
 **Persistence:** SQLite, one file, no server. It tracks missions (title, repos touched),
 worktrees (mission, repo, path, branch), chats and their turns, repo sessions
-(`contextId`, worktree, status), pending gates, chat event logs, and the agent process
+(`contextId`, worktree, status), pending approvals, chat event logs, and the agent process
 registry (below) — because "resume a mission days later"
-is a product use case, and an in-memory-only service can't serve it. The database file lives outside git
-(`var/orchestrator.db`, gitignored); traces remain the durable, shareable form of a chat.
+is a product use case, and an in-memory-only service can't serve it. **This schema is a
+floor, not a commitment:** it stores what resume, the approval inbox, and the recorder
+actually need, and session detail grows only when a use case demands it — replay reads
+recordings, not the database. The database file lives outside git
+(`var/orchestrator.db`, gitignored); recordings remain the durable, shareable form of a chat.
 
 **Agent process management:** repo sessions need a running A2A endpoint, and resolving one
 is a seam with two providers. The **index provider** points at already-running agents —
@@ -245,8 +289,8 @@ answering questions mid-flight), whether multiplexed through one process or spre
 several on the same worktree. The invariant is **one writer per worktree**: the service —
 which owns every dispatch — tracks an advisory write lease per worktree; one session holds
 it, the rest run read-shaped work concurrently. *Advisory* means it is not enforced by the
-filesystem: sessions declare intent at dispatch, the lease gates who may mutate, and
-permission gates are the backstop when a "reader" reaches for a write-shaped tool. The
+filesystem: sessions declare intent at dispatch, the lease decides who may mutate, and
+approval requests are the backstop when a "reader" reaches for a write-shaped tool. The
 declaration and enforcement mechanism is deliberately TBD (see Open questions).
 Parallel *writing* comes from more worktrees, not more writers on one.
 
@@ -254,11 +298,11 @@ Parallel *writing* comes from more worktrees, not more writers on one.
 sees its *repo* — full history, all branches and refs. That is a feature (diff against
 main, read another branch). What it must not touch is other *working trees*: the main
 clone's and other missions'. Enforcement there is **policy, not sandbox** — the agent can
-technically wander — so the practical controls are permission gates (a `Read` outside the
+technically wander — so the practical controls are approval requests (a `Read` outside the
 worktree is visible and deniable) plus whatever sandbox config the spawn provider sets.
 Said plainly here so the spec doesn't imply isolation it doesn't have.
 
-### Trace format
+### Recording format
 
 The schema below is the target; **the first real recording is the authority**, and
 `orchestrator-core` is expected to correct it the way Phase 7's recordings corrected the
@@ -266,7 +310,7 @@ scenario format. Tentative shape — turn-structured, events in the orchestrator
 vocabulary:
 
 ```yaml
-# traces/ship-health-check.yaml — recorded from a live chat
+# recordings/ship-health-check.yaml — recorded from a live chat
 turns:
   - user: "Add a health endpoint to billing-api and surface it in checkout-web"
     events:
@@ -274,7 +318,7 @@ turns:
       - dispatch:
           repo: billing-api
           prompt: "Add a /health endpoint returning service status"
-          gates:
+          approvals:
             - { tool: Bash, answer: allow }   # tool is informational; matched by order
       - dispatch:
           repo: checkout-web
@@ -289,12 +333,12 @@ turns:
 
 - Turns are ordered; a turn's events are ordered; concurrency representation waits for a
   real recording that actually dispatched in parallel.
-- Gates within a dispatch are matched **by order of arrival**, not by tool name — the
-  repo's scenario controls what gates appear; the trace answers them in sequence.
-- Traces are linear. They do not branch; the rig's repo scenarios do
+- Approvals within a dispatch are matched **by order of arrival**, not by tool name — the
+  repo's scenario controls what approvals appear; the recording answers them in sequence.
+- Recordings are linear. They do not branch; the rig's repo scenarios do
   (`on_allow`/`on_deny`). A path not taken during recording is a path replay cannot take
-  (see gate and turn semantics).
-- To demo or test a deny branch, **record a deny chat** — one answer per gate per
+  (see approval and turn semantics).
+- To demo or test a deny branch, **record a deny chat** — one answer per approval per
   recording, exactly the rig's own pattern (`20-recorded-planmode.yaml` is the deny
   recording).
 
@@ -312,7 +356,7 @@ protocol's own machinery:
 
 - **Turns** are A2A messages; streamed events are the task stream, in a2acode's event
   vocabulary because both counterparties are a2acode servers.
-- **Gates** are `input-required` — a repo gate reaches the browser as the task pausing,
+- **Approvals** are `input-required` — a repo agent's approval request reaches the browser as the task pausing,
   and the answer is an A2A message back on the same task. Nothing bespoke.
 - **Repo session panes** are per-session A2A subscriptions (`tasks/resubscribe`) through
   the same endpoint — N streams over HTTP/2, not one hand-rolled aggregate.
@@ -320,7 +364,7 @@ protocol's own machinery:
   advertise the upstream agent's own origin, so the proxy rewrites card URLs to itself —
   otherwise the browser's client escapes the proxy on its next call (found by prototype;
   see Risks). Beyond that, **the relay is the observation point** — session tracking into
-  missions, recording, and the gate inbox all happen by watching traffic, never by
+  missions, recording, and the approval inbox all happen by watching traffic, never by
   rewriting it.
 
 **The management plane** is the REST that A2A has no vocabulary for:
@@ -328,34 +372,34 @@ protocol's own machinery:
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/catalog` | Repositories and their agents (index provider today) |
-| `GET /api/missions` | Missions with chats, repos touched, pending gates |
+| `GET /api/missions` | Missions with chats, repos touched, pending approvals |
 | `POST /api/missions` | Start fresh — creates an empty mission |
 | `PATCH /api/missions/{m}` | Rename (auto-title suggested from the first exchange) |
 | `GET /api/missions/{m}/worktrees` | The mission's worktrees: repo, branch, path, status |
-| `GET /api/traces` | Recorded chats available to replay |
-| `POST /api/missions/{m}/chats` | Open a chat: `{agent: orchestrator\|<repo>, mode: live\|replay, trace?, pacing, demo_dwell_ms?}` → binds and returns its `contextId` |
+| `GET /api/recordings` | Recorded chats available to replay |
+| `POST /api/missions/{m}/chats` | Open a chat: `{agent: orchestrator\|<repo>, mode: live\|replay, recording?, pacing, demo_dwell_ms?}` → binds and returns its `contextId` |
 | `GET /api/chats/{id}` | Chat snapshot: turns so far, repo sessions, status |
-| `GET /api/gates` | The cross-mission gate inbox |
+| `GET /api/approvals` | The cross-mission approval inbox |
 
-## Gate and turn semantics, and pacing
+## Approval and turn semantics, and pacing
 
 The rule: **in replay, only recorded actions are enabled.** That covers both kinds of
 human action:
 
-- **Gates:** the gate card pauses and the human clicks, but only the recorded answer's
+- **Approvals:** the approval card pauses and the human clicks, but only the recorded answer's
   button is enabled; the other is disabled with a "not recorded" hint.
 - **User turns:** the message input offers the recorded next message — press send to
   advance — instead of free text.
 
-Replay cannot diverge into a path that was never recorded, which keeps linear traces
+Replay cannot diverge into a path that was never recorded, which keeps linear recordings
 coherent by construction rather than by documented caveat. During **live** chats both
 actions are free, and both are recorded.
 
 Pacing is a chat-level setting chosen at open:
 
-- **`interactive`** — recorded turns and gates wait indefinitely for the click. UI
+- **`interactive`** — recorded turns and approvals wait indefinitely for the click. UI
   default; manual inspection.
-- **`demo`** — recorded turns and gates auto-fire after a dwell (default 1500ms) so a
+- **`demo`** — recorded turns and approvals auto-fire after a dwell (default 1500ms) so a
   watcher sees the pause, the highlighted action, then the resume. Hands-free but legible.
 - **`headless`** — recorded actions fire immediately, zero dwell. What pytest and
   Playwright use when not deliberately clicking.
@@ -368,12 +412,12 @@ already the rig's job (`delay_ms`, `PLAYBACK_SPEED`); the service does not dupli
 
 Vite + React + TS, no state library beyond `useReducer`/context until something demands
 one. The data layer has the same two planes as the service: an **a2a-js client** for
-conversation (chat streams, gate answering, per-session `tasks/resubscribe`
+conversation (chat streams, approval answering, per-session `tasks/resubscribe`
 subscriptions), plain `fetch` for management REST. A2A streams feed a single reducer;
 components render from that state:
 
 - **Mission list** — the front door: missions with a glanceable status (chats, repos
-  touched, gates waiting, last activity). New-mission button is the fresh-start path;
+  touched, approvals waiting, last activity). New-mission button is the fresh-start path;
   resume is clicking one.
 - **Worktree view** (within a mission) — the mission's worktrees: repo, branch, path,
   what changed, which sessions worked there. The navigation home for "what did this
@@ -386,16 +430,16 @@ components render from that state:
 - **Repo session panes** — one per repo session, rendering by event type: plan steps with
   status, tool activity, `file_change` as a real diff view, streamed text, result with
   cost. Same renderers as the chat pane — one vocabulary.
-- **Gate surface** — gate cards inline where they arise, plus a cockpit-level indicator of
-  every gate waiting across missions (UC5's attention routing).
-- **Deep links** — `?mission=&chat=&trace=&pacing=&autostart=1` for the substrate dev
+- **Approval surface** — approval cards inline where they arise, plus a cockpit-level indicator of
+  every approval waiting across missions (UC5's attention routing).
+- **Deep links** — `?mission=&chat=&recording=&pacing=&autostart=1` for the substrate dev
   loop.
 
 ## Error handling
 
 - **Repo task fails**: the pane shows the failure, the turn is marked failed, its
   remaining dispatches are skipped, the chat stays open. No continue-on-error flag until a
-  real trace needs one.
+  real recording needs one.
 - **Catalog unreachable / repo missing**: the chat or dispatch fails, naming the repo
   lookup that failed.
 - **Live inference failure**: the turn is marked failed with the SDK error surfaced;
@@ -407,41 +451,41 @@ components render from that state:
 ## Testing
 
 - **pytest** (service): replay engine and API driven against a real `rig-serve`
-  subprocess, reusing the rig harness's spawn-and-wait pattern. The trace
+  subprocess, reusing the rig harness's spawn-and-wait pattern. The recording
   record→YAML→replay round-trip gets a test with a scripted driver standing in for the
   SDK loop — which, per the test-that-supplies-what-it-tests smell (four for four now),
-  proves *serialization only*. The evidence traces work is a **real recorded chat checked
-  into `traces/`**.
+  proves *serialization only*. The evidence recordings work is a **real recorded chat checked
+  into `recordings/`**.
 - **Playwright** (e2e): browser → service → rig with zero inference. Start a fresh
   mission and hold a direct chat in free text; replay a chat and assert the chat pane and
-  both repo panes stream; replay the deny trace, click its enabled Deny, assert the
+  both repo panes stream; replay the deny recording, click its enabled Deny, assert the
   `on_deny` branch renders; a headless-pacing replay completes unattended.
 - **Live path**: manual and on-demand, like the rig's `--backend claude` marks. Never CI.
 
 ## Milestones
 
 Slugs, not numbers, per convention. Direct sessions lead as the walking skeleton — the
-simplest end-to-end slice proves missions, the API envelope, A2A relay, gate machinery,
-and renderers before the SDK enters — and recording still precedes replay where traces
+simplest end-to-end slice proves missions, the API envelope, A2A relay, approval machinery,
+and renderers before the SDK enters — and recording still precedes replay where recordings
 exist at all.
 
 - **`direct-sessions`** — catalog (index provider) + SQLite store + the contextId-routed
   A2A proxy + thin management REST (missions, open chat) + thin UI (mission list, chat
-  pane, gate card, driven by a2a-js in the browser). Exit: start a fresh mission in the
-  browser, chat with a fake repo in free text over genuine A2A, answer a gate via
+  pane, approval card, driven by a2a-js in the browser). Exit: start a fresh mission in the
+  browser, chat with a fake repo in free text over genuine A2A, answer an approval via
   `input-required`, zero inference — use cases 1 and 4 working end to end against the
   rig. (The a2a-js-in-browser question is already retired — see Risks.)
 - **`orchestrator-core`** — the orchestrator mounted as an a2acode backend: the live loop
   (SDK session per chat, `list_repos`/`send_to_repo` tools), repo sessions joining
-  missions, gates propagating up as `input-required`, recorder, terminal chat REPL
+  missions, approvals propagating up as `input-required`, recorder, terminal chat REPL
   (`orch-record`). Exit: real live chats against the rig recorded, scrubbed,
   and checked in — covering an allow path, a deny path, and a failing dispatch.
 - **`replay-engine`** — replay chats (pacing, recorded-actions rule) through the API.
   Exit: pytest green against the rig, zero inference.
 - **`web-frontend`** — the full cockpit on the skeleton's bones: mission list with
-  glanceable status, chat sidebar, repo session panes, gate surface, deep links. Exit:
+  glanceable status, chat sidebar, repo session panes, approval surface, deep links. Exit:
   the browser demo — resume a mission, open a replay chat, watch the chat pane and two
-  repo panes, advance a recorded turn, answer a gate from the UI.
+  repo panes, advance a recorded turn, answer an approval from the UI.
 - **`e2e-suite`** — Playwright green, zero inference; PLAN.md Phase 6 bullet checked;
   this spec's decisions graduate to DESIGN-v3.
 - **`real-agents`** *(follow-on, beyond Phase 6's exit)* — the spawn provider: launch and
@@ -461,13 +505,13 @@ exist at all.
   translation duty** — agent cards advertise the upstream's own origin (in both
   `localhost` and `127.0.0.1` spellings), so the proxy must rewrite card URLs to its own
   origin or the browser's client escapes the proxy on its next call.
-- **Trace format is imagined until `orchestrator-core` records one.** Mitigated by
+- **Recording format is imagined until `orchestrator-core` records one.** Mitigated by
   ordering: the recorder ships first and owns the format; replay conforms to what
   recording produced.
 - **Two toolchains in one incubating directory.** Accepted cost; each root is
   self-contained, and extraction-later inherits both cleanly.
 - **Live mode depends on Claude Agent SDK behavior** (parallel tool calls, session
-  continuation, gate timing). Bounded: live is the recording instrument and the product's
+  continuation, approval timing). Bounded: live is the recording instrument and the product's
   real mode, but never the test path.
 - **The domain model is three layers deep** (mission → chat → repo session) on day one.
   Bounded by the layers being thin: a mission is a metadata record, a chat is a session
@@ -505,3 +549,16 @@ exist at all.
   track record.
 - **N worktrees per (mission, repo)** — if a mission ever genuinely wants two parallel
   writing workstreams in one repo. Serialize-by-default until a real mission demands it.
+
+## Revision log
+
+Major turns during drafting; the full history is this file's git log.
+
+- Predeclared `projects.yaml` died; missions became emergent and config shrank to the
+  catalog.
+- The bespoke REST+SSE chat API became the A2A conversation plane (contextId-routed
+  proxy); REST remains for management only.
+- "Checkout" became **worktree** (git's own term), with Repository first-class beside it.
+- "Gate" became **approval**; "trace" became **recording**.
+- The a2a-js-in-browser risk was retired the day it was written, by prototype (see
+  Risks).
