@@ -72,17 +72,24 @@ async def a2a_endpoint(request: Request) -> Response:
         f"{request.url.scheme}://{request.url.netloc}/a2a/chats/{context_id}/"
     )
 
-    if request.method == "GET" and path == CARD_PATH:
-        upstream = await http.get(target)
-        return Response(
-            rewrite_card(upstream.text, chat.upstream_url, proxy_base),
-            status_code=upstream.status_code,
-            media_type=upstream.headers.get("content-type", "application/json"),
-        )
-
     headers = {
         k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP
     }
+
+    if request.method == "GET" and path == CARD_PATH:
+        upstream = await http.get(target, headers=headers)
+        response_headers = {
+            k: v
+            for k, v in upstream.headers.items()
+            if k.lower() not in _HOP_BY_HOP and k.lower() != "content-encoding"
+        }
+        return Response(
+            rewrite_card(upstream.text, chat.upstream_url, proxy_base),
+            status_code=upstream.status_code,
+            headers=response_headers,
+            media_type=upstream.headers.get("content-type", "application/json"),
+        )
+
     upstream_request = http.build_request(
         request.method, target, content=request.stream(), headers=headers
     )
