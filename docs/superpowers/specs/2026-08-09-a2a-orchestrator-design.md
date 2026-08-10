@@ -124,9 +124,22 @@ In the order they were made during brainstorming:
 - **The cockpit is a web UI** (Vite + React + TS). Rich interactions — live multi-pane
   streams, diff rendering, gate cards — were the priority; a TUI or server-rendered UI
   fights that grain, and Playwright drives a browser first-class.
-- **The browser speaks only to the orchestrator API.** The service holds the A2A client
-  connections and re-exposes one aggregated SSE stream per chat. The frontend never
-  speaks A2A.
+- **The browser speaks A2A for conversation, REST for management** (this reversed an
+  earlier draft's "the frontend never speaks A2A"). Chats map onto A2A almost verbatim —
+  a chat is a `contextId`, turns are messages, gates are `input-required` — so a bespoke
+  chat API would have shadowed A2A with a homemade protocol, the exact drift this project
+  exists to prevent. The browser holds a real A2A client; the service is a
+  **contextId-routed pass-through proxy** (one A2A endpoint; each conversation's
+  contextId is bound to its counterparty — orchestrator or a repo agent — when the chat
+  opens). The proxy relays without translating, and the relay is the observation point:
+  session tracking, recording, the gate inbox. What doesn't map — missions, worktrees,
+  catalog, traces, pacing — is resource CRUD and stays REST. Side effect worth naming: a
+  working browser A2A client UI is a thing the ecosystem visibly lacks (a2a-inspector is
+  broken, and we know exactly how).
+- **The orchestrator mounts as an a2acode backend from day one.** Its A2A surface —
+  card, task state machine, streaming, `input-required` — is a2acode's real server, the
+  rig's own can't-drift guarantee applied to our own API. Live and replay are both
+  `Backend` implementations, mirroring the rig's swappable-backend pattern one level up.
 - **Missions are emergent** (this reversed an earlier draft's predeclared `projects.yaml`):
   the fresh-start use case doesn't survive upfront repo selection, so config shrank to the
   catalog and the grouping became runtime state.
@@ -176,7 +189,10 @@ Default ports: rig at 9200 (existing convention), orchestrator service at 9300.
 ## The orchestrator agent
 
 `orch-serve` hosts everything: one process, many missions and chats, the way the rig is one
-process, many repos. One chat engine, three modes:
+process, many repos. **The orchestrator is served by a2acode's own machinery, mounted
+in-process** — its card, task state machine, streaming, and `input-required` handling come
+from the real server, and its two brains are `Backend` implementations, the rig's
+swappable-backend pattern one level up:
 
 **Live orchestrator chats** each run one Claude Agent SDK session inside the process. Its
 tools read the catalog (`list_repos()`) and open or continue repo sessions
@@ -185,17 +201,20 @@ terminal). The model decides which repos to involve, what to ask, in what order;
 dispatch falls out of the model issuing multiple `send_to_repo` calls in one turn;
 multi-turn chat is the SDK session continuing. Repos the chat touches join its mission.
 **Gates never route to the model.** When a repo session parks in `input-required`, the
-service surfaces the gate to the human, relays the answer over A2A, and the dispatch
-resumes. Gate decisions are human decisions, and they are what gets recorded.
+orchestrator parks its own task `input-required` in turn — the gate propagates up the A2A
+chain to the browser as protocol, not as a bespoke event — and the human's answer flows
+back down the same way. Gate decisions are human decisions, and they are what gets
+recorded.
 
 **Replay chats** walk a trace: emit the recorded narration, dispatch each recorded step to
 its repo, pause at recorded user turns and gates per the pacing mode. No inference, no SDK,
 millisecond turns. A repo task failing marks the turn failed and skips its remaining steps.
 
-**Direct chats** need neither brain: the chat *is* one repo session, and the service just
-relays turns and gate answers over A2A and streams the repo's events back. Recording a
-direct chat captures only the user's turns and gate answers — the repo side is already
-scripted (rig) or real (production) — so replaying one is a convenience, not a necessity.
+**Direct chats** need neither brain, and don't even touch the orchestrator agent: the
+browser's A2A client talks to the repo agent through the contextId-routed proxy, which
+relays unmodified and observes. Recording a direct chat captures only the user's turns and
+gate answers — the repo side is already scripted (rig) or real (production) — so replaying
+one is a convenience, not a necessity.
 
 **The recorder** tees live chats into `traces/*.yaml`, scrubbed like Phase 7's recordings:
 shape kept, volatile identifiers (session ids, costs) dropped or rounded. Before the
@@ -206,8 +225,7 @@ answer gates y/n.
 worktrees (mission, repo, path, branch), chats and their turns, repo sessions
 (`contextId`, worktree, status), pending gates, chat event logs, and the agent process
 registry (below) — because "resume a mission days later"
-is a product use case, and an in-memory-only service can't serve it. Live SSE resume reads
-the same event log via `Last-Event-ID`. The database file lives outside git
+is a product use case, and an in-memory-only service can't serve it. The database file lives outside git
 (`var/orchestrator.db`, gitignored); traces remain the durable, shareable form of a chat.
 
 **Agent process management:** repo sessions need a running A2A endpoint, and resolving one
@@ -280,28 +298,41 @@ turns:
   recording, exactly the rig's own pattern (`20-recorded-planmode.yaml` is the deny
   recording).
 
-## The orchestrator API
+## The service's two planes
 
-The only surface the cockpit knows. Small on purpose:
+The cockpit sees two surfaces with a clean split: **conversation is A2A, management is
+REST.**
+
+**The conversation plane** is one A2A endpoint at the service (`/a2a`), JSON-RPC + SSE,
+driven by a real A2A client in the browser (a2a-js). The service is a **contextId-routed
+pass-through proxy**: opening a chat (REST, below) binds a fresh conversation to its
+counterparty — the orchestrator agent or one repo agent — and every subsequent A2A call
+on that contextId relays to that upstream unmodified. Everything conversational rides the
+protocol's own machinery:
+
+- **Turns** are A2A messages; streamed events are the task stream, in a2acode's event
+  vocabulary because both counterparties are a2acode servers.
+- **Gates** are `input-required` — a repo gate reaches the browser as the task pausing,
+  and the answer is an A2A message back on the same task. Nothing bespoke.
+- **Repo session panes** are per-session A2A subscriptions (`tasks/resubscribe`) through
+  the same endpoint — N streams over HTTP/2, not one hand-rolled aggregate.
+- The proxy relays without translating; **the relay is the observation point** — session
+  tracking into missions, recording, and the gate inbox all happen by watching traffic,
+  never by rewriting it.
+
+**The management plane** is the REST that A2A has no vocabulary for:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/catalog` | Reachable repo agents (proxied rig index today) |
-| `GET /api/missions` | Missions with their chats, repos touched, pending gates |
+| `GET /api/catalog` | Repositories and their agents (index provider today) |
+| `GET /api/missions` | Missions with chats, repos touched, pending gates |
 | `POST /api/missions` | Start fresh — creates an empty mission |
 | `PATCH /api/missions/{m}` | Rename (auto-title suggested from the first exchange) |
+| `GET /api/missions/{m}/worktrees` | The mission's worktrees: repo, branch, path, status |
 | `GET /api/traces` | Recorded chats available to replay |
-| `POST /api/missions/{m}/chats` | Open a chat: `{agent: orchestrator\|<repo>, mode: live\|replay, trace?, pacing, demo_dwell_ms?}` |
+| `POST /api/missions/{m}/chats` | Open a chat: `{agent: orchestrator\|<repo>, mode: live\|replay, trace?, pacing, demo_dwell_ms?}` → binds and returns its `contextId` |
 | `GET /api/chats/{id}` | Chat snapshot: turns so far, repo sessions, status |
-| `POST /api/chats/{id}/messages` | Send a user turn (live: free text; replay: advances the recorded turn) |
-| `GET /api/chats/{id}/events` | SSE stream, resumable via `Last-Event-ID` |
-| `POST /api/chats/{id}/gates/{gate_id}` | `{answer: allow\|deny}` |
-
-The SSE stream interleaves two tagged sources: orchestrator events (the chat pane) and
-repo session events (the repo panes) — `{id, source: orchestrator|repo, repo?,
-session_id?, type, payload}` — where `type` is a2acode's event vocabulary in both cases,
-plus lifecycle markers (`chat_opened`, `turn_started`, `gate_opened`, `gate_answered`,
-`turn_finished`, `chat_failed`).
+| `GET /api/gates` | The cross-mission gate inbox |
 
 ## Gate and turn semantics, and pacing
 
@@ -333,7 +364,10 @@ already the rig's job (`delay_ms`, `PLAYBACK_SPEED`); the service does not dupli
 ## The cockpit
 
 Vite + React + TS, no state library beyond `useReducer`/context until something demands
-one. The SSE stream feeds a single reducer; components render from that state:
+one. The data layer has the same two planes as the service: an **a2a-js client** for
+conversation (chat streams, gate answering, per-session `tasks/resubscribe`
+subscriptions), plain `fetch` for management REST. A2A streams feed a single reducer;
+components render from that state:
 
 - **Mission list** — the front door: missions with a glanceable status (chats, repos
   touched, gates waiting, last activity). New-mission button is the fresh-start path;
@@ -363,8 +397,9 @@ one. The SSE stream feeds a single reducer; components render from that state:
   lookup that failed.
 - **Live inference failure**: the turn is marked failed with the SDK error surfaced;
   never silently retried.
-- **SSE drop**: browser auto-reconnects with `Last-Event-ID`; the service replays the
-  tail from the chat log.
+- **Stream drop**: the browser re-subscribes with A2A's own `tasks/resubscribe`, which
+  snapshots current task state and resumes — the protocol's recovery machinery, not a
+  hand-rolled `Last-Event-ID` scheme.
 
 ## Testing
 
@@ -387,13 +422,16 @@ simplest end-to-end slice proves missions, the API envelope, A2A relay, gate mac
 and renderers before the SDK enters — and recording still precedes replay where traces
 exist at all.
 
-- **`direct-sessions`** — catalog (index provider) + SQLite store + thin chats API (open direct chat,
-  messages, SSE, gates) + thin UI (mission list, chat pane, gate card). Exit: start a
-  fresh mission in the browser, chat with a fake repo in free text, answer a gate, zero
-  inference — use cases 1 and 4 working end to end against the rig.
-- **`orchestrator-core`** — conversational live loop (SDK session per chat,
-  `list_repos`/`send_to_repo` tools), repo sessions joining missions, recorder, terminal
-  chat REPL (`orch-record`). Exit: real live chats against the rig recorded, scrubbed,
+- **`direct-sessions`** — catalog (index provider) + SQLite store + the contextId-routed
+  A2A proxy + thin management REST (missions, open chat) + thin UI (mission list, chat
+  pane, gate card, driven by a2a-js in the browser). Exit: start a fresh mission in the
+  browser, chat with a fake repo in free text over genuine A2A, answer a gate via
+  `input-required`, zero inference — use cases 1 and 4 working end to end against the
+  rig, and the a2a-js-in-browser risk retired first.
+- **`orchestrator-core`** — the orchestrator mounted as an a2acode backend: the live loop
+  (SDK session per chat, `list_repos`/`send_to_repo` tools), repo sessions joining
+  missions, gates propagating up as `input-required`, recorder, terminal chat REPL
+  (`orch-record`). Exit: real live chats against the rig recorded, scrubbed,
   and checked in — covering an allow path, a deny path, and a failing dispatch.
 - **`replay-engine`** — replay chats (pacing, recorded-actions rule) through the API.
   Exit: pytest green against the rig, zero inference.
@@ -410,6 +448,11 @@ exist at all.
 
 ## Risks
 
+- **a2a-js in the browser is unproven here.** Streaming is POST + SSE-response, which
+  needs fetch-streaming rather than `EventSource`; the JS SDK handles it in Node (the
+  a2a-cli fork lives on it) but this project hasn't run it in a browser. Deliberately the
+  first risk `direct-sessions` retires — and the fallback, if it genuinely can't work, is
+  the earlier draft's bespoke SSE envelope, confined to the browser↔proxy hop.
 - **Trace format is imagined until `orchestrator-core` records one.** Mitigated by
   ordering: the recorder ships first and owns the format; replay conforms to what
   recording produced.
