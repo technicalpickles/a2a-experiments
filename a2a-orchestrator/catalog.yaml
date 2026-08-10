@@ -1,0 +1,6 @@
+# Which repositories the cockpit can reach. The index provider discovers
+# repos from a running index (GET /) — the rig at its conventional port
+# today, real a2acode instances later. Swapping the URL is the whole
+# configuration change the spec promises.
+provider: index
+url: http://127.0.0.1:9200/
