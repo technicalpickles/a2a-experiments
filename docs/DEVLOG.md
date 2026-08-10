@@ -1557,3 +1557,41 @@ session was parked. Descriptions and reality drift even inside a single session'
 
 Rig untouched. Suite still 165 passed / 4 xfailed. Taskwarrior task `777656ed` closed; 14
 pending. Six issues out.
+
+## 2026-08-09 → 10 — The consumer gets its spec: the cockpit, missions, and A2A turtles
+
+Brainstormed Phase 6's last bullet (taskwarrior `9b3c2a04`) into a spec:
+`docs/superpowers/specs/2026-08-09-a2a-orchestrator-design.md`, eighteen commits of
+iteration, three crit review rounds (16 comments, all addressed). The deliverable is a
+product now, not a demo: a **cockpit** for coordinating agent work across repos —
+missions (emergent groupings of chats + worktrees), an orchestrator agent you chat with
+that delegates to repo agents, approvals routed to one place.
+
+The decisions that mattered, in the order the spec reversed itself into them:
+
+- **Missions are emergent.** The predeclared `projects.yaml` died the moment the
+  fresh-start use case was written down: walk in, describe the work, no repo selection.
+  Config shrank to a catalog.
+- **The browser speaks A2A.** The bespoke REST+SSE chat API was shadowing A2A with a
+  homemade protocol — a chat is a `contextId`, turns are messages, approvals are
+  `input-required`. The service became a contextId-routed pass-through proxy; REST
+  remains for what A2A has no vocabulary for (missions, worktrees, catalog).
+- **Proven, not assumed:** `@a2a-js/sdk/client` 1.0.1 works in a real browser — esbuild
+  clean for the browser platform, and a live Chrome run through a ~40-line Starlette
+  proxy against `rig-serve` streamed a full task lifecycle. Found the proxy's one
+  translation duty: cards advertise the upstream origin in both `localhost` and
+  `127.0.0.1` spellings and must be rewritten or the client escapes the proxy.
+- **Recording reuses the rig.** The orchestrator is a `Backend`, so `RecordingBackend`
+  wraps it unchanged and a recorded chat is structurally a scenario one level up. The
+  two real gaps: dispatches must be recognizable, and replay must execute them.
+- **Milestones resliced for visible progress** (crit round three's aftermath): six rungs,
+  each ending in a demo — direct-sessions, orchestrator-live, recorder, replay, cockpit,
+  e2e-suite — with `real-agents` (spawn provider, worktree lease mechanics, worktrunk
+  integration) as the follow-on where it becomes a daily driver.
+
+Vocabulary settled by review: **approval** (not gate), **recording** (not trace),
+**worktree** (not checkout), **mission** (the grouping). A verified-facts appendix went
+into the spec so implementers inherit the session's discoveries instead of re-earning
+them.
+
+Rig untouched. Next session: `writing-plans` for `direct-sessions`.
