@@ -1,0 +1,7 @@
+# A static catalog pointing at a single real a2acode (which serves a card
+# but no GET / index). Use with: uv run orch-serve --catalog catalog-live.yaml
+provider: static
+repos:
+  - name: demo-app
+    description: Real a2acode (claude backend) editing ~/scratch/demo-app
+    card_url: http://127.0.0.1:9100/.well-known/agent-card.json

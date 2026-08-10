@@ -48,3 +48,36 @@ def test_load_rejects_unknown_providers(tmp_path):
 
     with pytest.raises(ValueError, match="spawn"):
         Catalog.load(path)
+
+
+STATIC_YAML = """\
+provider: static
+repos:
+  - name: demo-app
+    description: A real a2acode serving ~/scratch/demo-app
+    card_url: http://127.0.0.1:9400/.well-known/agent-card.json
+"""
+
+
+async def test_static_catalog_lists_its_inline_repos(tmp_path):
+    path = tmp_path / "catalog.yaml"
+    path.write_text(STATIC_YAML)
+
+    catalog = Catalog.load(path)
+    entries = await catalog.repos(http=None)
+
+    assert [entry.name for entry in entries] == ["demo-app"]
+    assert entries[0].base_url == "http://127.0.0.1:9400/"
+
+
+async def test_static_catalog_resolves_without_http(tmp_path):
+    path = tmp_path / "catalog.yaml"
+    path.write_text(STATIC_YAML)
+
+    catalog = Catalog.load(path)
+    entry = await catalog.resolve(http=None, name="demo-app")
+
+    assert entry.card_url == "http://127.0.0.1:9400/.well-known/agent-card.json"
+
+    with pytest.raises(LookupError, match="no-such-repo"):
+        await catalog.resolve(http=None, name="no-such-repo")
