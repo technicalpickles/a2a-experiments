@@ -194,7 +194,7 @@ Product use cases above assume real repo agents; these are the *builder's* use c
 a2a-orchestrator/
   pyproject.toml               # uv project, mirrors a2a-rig conventions
   src/a2a_orchestrator/        # service: orchestrator core, API, recorder, replay
-                               #   CLIs: orch-serve (the service), orch-record (terminal recorder)
+                               #   CLI: orch-serve (the service); an orch-record REPL only if needed
   frontend/                    # the cockpit: Vite + React + TS
     e2e/                       # Playwright (same toolchain as the frontend)
   catalog.yaml                 # where the repo agents are (rig index URL today)
@@ -284,10 +284,11 @@ sequenceDiagram
     S->>R: relay (session resumes → completed)
 ```
 
-**The recorder** tees live chats into `recordings/*.yaml`, scrubbed like Phase 7's recordings:
-shape kept, volatile identifiers (session ids, costs) dropped or rounded. Before the
-cockpit exists, recording runs through a terminal chat REPL in `orch-record` — type turns,
-answer approvals y/n.
+**The recorder** tees live chats into `recordings/*.yaml`, scrubbed like Phase 7's
+recordings: shape kept, volatile identifiers (session ids, costs) dropped or rounded.
+Recording happens through the same browser UI live chats already use (the skeleton lands
+first — see Milestones); an `orch-record` terminal REPL is a convenience built only if
+recording-without-a-browser turns out to matter.
 
 **Persistence:** SQLite, one file, no server. It tracks missions (title, repos touched),
 worktrees (mission, repo, path, branch), chats and their turns, repo sessions
@@ -341,11 +342,11 @@ the recording (it records as the `send_to_repo` tool call it is), and replay mus
 *execute* dispatches rather than narrate them — `playback` only emits events, while the
 replay implementation re-dispatches so the repo panes stream real sessions. So the
 recorder starts as `RecordingBackend` imported as a library, the format may collapse into
-the scenario format with dispatch conventions, and `orchestrator-core` finds out how far
+the scenario format with dispatch conventions, and `recorder` finds out how far
 the reuse actually carries.
 
 The schema below is the target; **the first real recording is the authority**, and
-`orchestrator-core` is expected to correct it the way Phase 7's recordings corrected the
+`recorder` is expected to correct it the way Phase 7's recordings corrected the
 scenario format. Tentative shape — turn-structured, events in the orchestrator's
 vocabulary:
 
@@ -504,30 +505,48 @@ components render from that state:
 
 ## Milestones
 
-Slugs, not numbers, per convention. Direct sessions lead as the walking skeleton — the
-simplest end-to-end slice proves missions, the API envelope, A2A relay, approval machinery,
-and renderers before the SDK enters — and recording still precedes replay where recordings
-exist at all.
+Slugs, not numbers, per convention. Each rung ends with something you can *see* — the
+"👀" line is the demo that proves it — and each adds its own tests rather than deferring
+them to a testing milestone. Direct sessions lead as the walking skeleton (the simplest
+end-to-end slice proves missions, the API envelope, A2A relay, approval machinery, and
+renderers before the SDK enters), and the recording-before-replay principle holds because
+`recorder` precedes `replay` — live mode needs no format to imagine.
 
 - **`direct-sessions`** — catalog (index provider) + SQLite store + the contextId-routed
   A2A proxy + thin management REST (missions, open chat) + thin UI (mission list, chat
-  pane, approval card, driven by a2a-js in the browser). Exit: start a fresh mission in the
-  browser, chat with a fake repo in free text over genuine A2A, answer an approval via
-  `input-required`, zero inference — use cases 1 and 4 working end to end against the
-  rig. (The a2a-js-in-browser question is already retired — see Risks.)
-- **`orchestrator-core`** — the orchestrator mounted as an a2acode backend: the live loop
-  (SDK session per chat, `list_repos`/`send_to_repo` tools), repo sessions joining
-  missions, approvals propagating up as `input-required`, recorder, terminal chat REPL
-  (`orch-record`). Exit: real live chats against the rig recorded, scrubbed,
-  and checked in — covering an allow path, a deny path, and a failing dispatch.
-- **`replay-engine`** — replay chats (pacing, recorded-actions rule) through the API.
-  Exit: pytest green against the rig, zero inference.
-- **`web-frontend`** — the full cockpit on the skeleton's bones: mission list with
-  glanceable status, chat sidebar, repo session panes, approval surface, deep links. Exit:
-  the browser demo — resume a mission, open a replay chat, watch the chat pane and two
-  repo panes, advance a recorded turn, answer an approval from the UI.
-- **`e2e-suite`** — Playwright green, zero inference; PLAN.md Phase 6 bullet checked;
-  this spec's decisions graduate to DESIGN-v3.
+  pane, approval card, driven by a2a-js in the browser). pytest: proxy routing, card
+  rewrite, missions API, against a live `rig-serve`.
+  👀 Start a fresh mission in the browser, chat with a fake repo in free text over
+  genuine A2A, answer an approval via `input-required` — use cases 1 and 4 end to end,
+  zero inference. (The a2a-js-in-browser question is already retired — see Risks.)
+- **`orchestrator-live`** — the orchestrator agent itself, before any recording exists:
+  mounted as an a2acode backend, live SDK loop (session per chat,
+  `list_repos`/`send_to_repo` tools), repo sessions joining missions, approvals
+  propagating up as `input-required` — reachable from the same chat UI the skeleton
+  built, with repo panes via `tasks/resubscribe`.
+  👀 One prompt fans out to two repos; both panes stream side by side; a repo's approval
+  bubbles up through the orchestrator to your click. Costs live inference per run — it's
+  the real thing.
+- **`recorder`** — a2a-rig's `RecordingBackend` reused as a library, wrapped around the
+  live orchestrator; scrub pass; recordings checked in covering an allow path, a deny
+  path, and a failing dispatch. First recordings get made through the UI
+  `orchestrator-live` already proved — the `orch-record` REPL shrinks to a convenience
+  and is built only if recording-without-a-browser turns out to matter.
+  👀 A real conversation lands in `recordings/` as YAML you can read. Format authority
+  established here, before replay exists.
+- **`replay`** — the replay implementation (second `Backend`), pacing modes, the
+  recorded-actions rule, replay chats openable from the browser. pytest: replay against
+  the rig, zero inference — the dev loop goes inference-free forever after.
+  👀 `ship-health-check` replays hands-free in `demo` pacing; interactive replay steps
+  through turn by turn with only recorded actions enabled.
+- **`cockpit`** — the full UI on the skeleton's bones: mission list with glanceable
+  status, chat sidebar, approval inbox, worktree view, deep links, rich renderers (plan
+  steps, diffs).
+  👀 Resume yesterday's mission, see approvals waiting across missions, answer them from
+  the inbox.
+- **`e2e-suite`** — Playwright green, zero inference, CI-able; PLAN.md Phase 6 bullet
+  checked; this spec's decisions graduate to DESIGN-v3.
+  👀 The suite is the demo: browser-driven, deterministic, no model anywhere.
 - **`real-agents`** *(follow-on, beyond Phase 6's exit)* — the spawn provider: launch and
   supervise a2acode per worktree, process registry in the database, idle reaping;
   worktrunk integration for worktree creation decided here. This is where the cockpit
@@ -545,7 +564,7 @@ exist at all.
   translation duty** — agent cards advertise the upstream's own origin (in both
   `localhost` and `127.0.0.1` spellings), so the proxy must rewrite card URLs to its own
   origin or the browser's client escapes the proxy on its next call.
-- **Recording format is imagined until `orchestrator-core` records one.** Mitigated by
+- **Recording format is imagined until `recorder` records one.** Mitigated by
   ordering: the recorder ships first and owns the format; replay conforms to what
   recording produced.
 - **Two toolchains in one incubating directory.** Accepted cost; each root is
@@ -556,7 +575,7 @@ exist at all.
 - **The domain model is three layers deep** (mission → chat → repo session) on day one.
   Bounded by the layers being thin: a mission is a metadata record, a chat is a session
   plus an event log, a repo session is a `contextId`. If any layer fails to earn its keep
-  in the first two milestones, collapse it before `replay-engine` builds API surface on
+  in the first two milestones, collapse it before `replay` builds API surface on
   it.
 - **Product scope pulls toward daily-driver features** (persistence depth, mission
   lifecycle, multi-machine). The incubation boundary: build what the use cases above
