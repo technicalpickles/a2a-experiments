@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Client } from '@a2a-js/sdk/client'
 import type { ChatRef } from './api'
 import { connect, sendTurn, type Permission } from './a2a'
@@ -23,6 +23,12 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
 
   if (clientRef.current === null) clientRef.current = connect(chat.a2a_url)
 
+  const aliveRef = useRef(true)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
+  }, [])
+
   const append = (item: LogItem) => setLog((prev) => [...prev, item])
 
   // One turn: send, then drain the stream. The stream ends on terminal
@@ -34,6 +40,7 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
       const client = await clientRef.current!
       const turn = sendTurn(client, text, { contextId: chat.context_id, taskId })
       for await (const event of turn) {
+        if (!aliveRef.current) break
         if (event.kind === 'artifact-text' && event.text) {
           append({ who: 'agent', text: event.text })
         } else if (event.kind === 'permission') {
@@ -48,7 +55,7 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
     } catch (error) {
       append({ who: 'system', text: `error: ${String(error)}` })
     } finally {
-      setBusy(false)
+      if (aliveRef.current) setBusy(false)
     }
   }
 
