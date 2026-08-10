@@ -590,6 +590,57 @@ exist at all.
 - **N worktrees per (mission, repo)** — if a mission ever genuinely wants two parallel
   writing workstreams in one repo. Serialize-by-default until a real mission demands it.
 
+## Appendix: verified facts for implementers
+
+Facts an implementer would otherwise rediscover and a reviewer would otherwise have to
+take on faith. Each was verified against running code on 2026-08-09/10 — none are
+assumptions.
+
+**a2a-js in the browser** (proven by prototype, see Risks):
+
+- Import `Client`/`ClientFactory` from `@a2a-js/sdk/client`, `Role` from `@a2a-js/sdk`.
+  The client subpath's only external dependency is `jose`; esbuild
+  `--platform=browser` resolves the whole graph clean.
+- `ClientFactory().createFromUrl(url)` **requires a trailing slash** — without one, URL
+  resolution drops the last path segment and the card fetch 404s at
+  `/repos/.well-known/…`.
+- Messages are protobuf-shaped: `role: Role.ROLE_USER`, parts as
+  `{ content: { $case: "text", value: "…" }, filename: "", mediaType: "" }`.
+  `client.sendMessageStream(params)` returns an async iterable; each response's
+  `payload.$case` is one of `task` / `statusUpdate` / `artifactUpdate` / `message`.
+- Streaming is POST + SSE-response consumed via fetch-streaming
+  (`TextDecoderStream`/`getReader`) — no `EventSource` anywhere.
+
+**The proxy** (the working ~40-line Starlette prototype is the seed of
+`direct-sessions`):
+
+- Agent cards advertise the upstream's own origin in **both** `http://localhost:<port>`
+  and `http://127.0.0.1:<port>` spellings; rewrite both or the browser escapes the proxy.
+- SSE responses must be relayed with raw streaming (`httpx` `stream=True` +
+  `aiter_raw`); JSON responses can be buffered for the card rewrite.
+- Neither a2acode nor the rig sets CORS headers — the same-origin proxy isn't optional.
+
+**Approvals on the wire** (from `a2a-rig/tests/test_permission.py`, which pinned this
+against a real claude run too):
+
+- A parked task's state is `input_required`. The renderable detail is **not in the text
+  part** — it rides the status message's metadata as `a2acode_permission`:
+  `{tool, request_id, input}`. The approval card renders from that.
+- Answering is a plain message on the same `task_id` + `context_id`. a2acode accepts a
+  vocabulary — `allow`/`yes`/`y`/`approve`/`ok`/`accept`/`grant` (and deny equivalents) —
+  the card's buttons send `allow` or `deny`.
+
+**The rig as a dev target:**
+
+- Index shape: `GET /` → `{"repos": [{"name", "description", "card_url"}]}`; repos mount
+  at `/repos/<name>/`, card at `/repos/<name>/.well-known/agent-card.json`.
+- Scenario triggers for manual poking at `billing-api`: any free text hits the
+  `99-default` catch-all; `"run the tests"` parks the task at an approval
+  (`30-refactor`); a first-turn greeting hits `90-greeting`.
+- The pytest harness pattern to copy is `a2a-rig/tests/conftest.py`: a session-scoped
+  server pool keyed by (backend, args) around `a2a_rig.server.serve()`, because booting
+  a2acode costs ~0.5s and sharing is safe (tasks are isolated by id).
+
 ## Revision log
 
 Major turns during drafting; the full history is this file's git log.
