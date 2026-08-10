@@ -316,9 +316,12 @@ protocol's own machinery:
   and the answer is an A2A message back on the same task. Nothing bespoke.
 - **Repo session panes** are per-session A2A subscriptions (`tasks/resubscribe`) through
   the same endpoint — N streams over HTTP/2, not one hand-rolled aggregate.
-- The proxy relays without translating; **the relay is the observation point** — session
-  tracking into missions, recording, and the gate inbox all happen by watching traffic,
-  never by rewriting it.
+- The proxy relays without translating, with **one deliberate exception**: agent cards
+  advertise the upstream agent's own origin, so the proxy rewrites card URLs to itself —
+  otherwise the browser's client escapes the proxy on its next call (found by prototype;
+  see Risks). Beyond that, **the relay is the observation point** — session tracking into
+  missions, recording, and the gate inbox all happen by watching traffic, never by
+  rewriting it.
 
 **The management plane** is the REST that A2A has no vocabulary for:
 
@@ -427,7 +430,7 @@ exist at all.
   pane, gate card, driven by a2a-js in the browser). Exit: start a fresh mission in the
   browser, chat with a fake repo in free text over genuine A2A, answer a gate via
   `input-required`, zero inference — use cases 1 and 4 working end to end against the
-  rig, and the a2a-js-in-browser risk retired first.
+  rig. (The a2a-js-in-browser question is already retired — see Risks.)
 - **`orchestrator-core`** — the orchestrator mounted as an a2acode backend: the live loop
   (SDK session per chat, `list_repos`/`send_to_repo` tools), repo sessions joining
   missions, gates propagating up as `input-required`, recorder, terminal chat REPL
@@ -448,11 +451,16 @@ exist at all.
 
 ## Risks
 
-- **a2a-js in the browser is unproven here.** Streaming is POST + SSE-response, which
-  needs fetch-streaming rather than `EventSource`; the JS SDK handles it in Node (the
-  a2a-cli fork lives on it) but this project hasn't run it in a browser. Deliberately the
-  first risk `direct-sessions` retires — and the fallback, if it genuinely can't work, is
-  the earlier draft's bespoke SSE envelope, confined to the browser↔proxy hop.
+- ~~**a2a-js in the browser is unproven here.**~~ **Retired 2026-08-09**, same day it was
+  written, by a throwaway prototype: `@a2a-js/sdk/client` 1.0.1 esbuilds clean for
+  `--platform=browser` (56 modules, zero Node builtins, `jose` via its browser
+  condition), and in Chrome — through a ~40-line same-origin proxy in front of a live
+  `rig-serve` — `createFromUrl` fetched the card and `sendMessageStream` streamed a full
+  task lifecycle (submitted → working → artifact → completed) over JSON-RPC + SSE, zero
+  inference. One design fact came back: **the pass-through proxy has exactly one
+  translation duty** — agent cards advertise the upstream's own origin (in both
+  `localhost` and `127.0.0.1` spellings), so the proxy must rewrite card URLs to its own
+  origin or the browser's client escapes the proxy on its next call.
 - **Trace format is imagined until `orchestrator-core` records one.** Mitigated by
   ordering: the recorder ships first and owns the format; replay conforms to what
   recording produced.
