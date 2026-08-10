@@ -8,6 +8,7 @@ import {
   type Mission,
   type RepoEntry,
 } from './api'
+import { ChatPane } from './ChatPane'
 
 export default function App() {
   const [missions, setMissions] = useState<Mission[]>([])
@@ -105,7 +106,7 @@ export default function App() {
           </li>
         ))}
       </ul>
-      {chat && <p>chat bound: {chat.context_id}</p>}
+      {chat && <ChatPane chat={chat} key={chat.context_id} />}
     </main>
   )
 }
