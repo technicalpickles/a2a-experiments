@@ -24,7 +24,9 @@ made load-bearing here.
 complete, suite green); this work is the next thing, consuming it as-is. The split earns
 its keep because the two have different lifecycles — the rig is done-and-stable with its
 own separate future (M4: offering `playback`/`--record` upstream to a2acode), the cockpit
-is greenfield — and the boundary is cheap: HTTP, no shared code. Changes flow back into
+is greenfield — and the runtime boundary is cheap: HTTP. (Code reuse is separate from
+co-evolution: the recorder imports a2a-rig's `RecordingBackend` as a library — see
+Recording format.) Changes flow back into
 a2a-rig only when this work actually needs them (bugfixes; per-mission fidelity at
 `real-agents`, see Risks), not as a second roadmap.
 
@@ -328,6 +330,19 @@ worktree is visible and deniable) plus whatever sandbox config the spawn provide
 Said plainly here so the spec doesn't imply isolation it doesn't have.
 
 ### Recording format
+
+**The overlap with a2a-rig's recording machinery is large, and the plan is reuse, not a
+parallel build.** The orchestrator is a `Backend`, so a2a-rig's `RecordingBackend` can
+wrap it unchanged; a recorded chat is structurally a scenario (turn-matched plays, one
+approval answer per recording — the same one-branch-per-run property `rig-record` already
+has); and in replay, the human sending the recorded turn *is* the incoming message a
+`turn: N` play matches. Two real differences remain: a dispatch must be recognizable in
+the recording (it records as the `send_to_repo` tool call it is), and replay must
+*execute* dispatches rather than narrate them — `playback` only emits events, while the
+replay implementation re-dispatches so the repo panes stream real sessions. So the
+recorder starts as `RecordingBackend` imported as a library, the format may collapse into
+the scenario format with dispatch conventions, and `orchestrator-core` finds out how far
+the reuse actually carries.
 
 The schema below is the target; **the first real recording is the authority**, and
 `orchestrator-core` is expected to correct it the way Phase 7's recordings corrected the
