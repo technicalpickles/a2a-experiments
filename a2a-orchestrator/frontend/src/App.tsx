@@ -18,7 +18,12 @@ export default function App() {
   const [error, setError] = useState('')
 
   const refresh = () =>
-    listMissions().then(setMissions).catch((e) => setError(String(e)))
+    listMissions()
+      .then((m) => {
+        setMissions(m)
+        setError('')
+      })
+      .catch((e) => setError(String(e)))
 
   useEffect(() => {
     refresh()
