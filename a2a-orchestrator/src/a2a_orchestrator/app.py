@@ -12,7 +12,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from a2a_orchestrator import api
+from a2a_orchestrator import api, proxy
 from a2a_orchestrator.catalog import Catalog
 from a2a_orchestrator.store import Store
 
@@ -37,6 +37,11 @@ def build_app(
         Route("/api/missions", api.create_mission, methods=["POST"]),
         Route("/api/missions/{mission_id}", api.rename_mission, methods=["PATCH"]),
         Route("/api/missions/{mission_id}/chats", api.open_chat, methods=["POST"]),
+        Route(
+            "/a2a/chats/{context_id}/{path:path}",
+            proxy.a2a_endpoint,
+            methods=["GET", "POST"],
+        ),
     ]
     if frontend_dist and frontend_dist.is_dir():
         routes.append(Mount("/", StaticFiles(directory=frontend_dist, html=True)))
