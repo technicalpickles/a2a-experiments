@@ -164,6 +164,16 @@ def test_load_repos_reads_every_directory(tmp_path):
     assert [r.repo_id for r in load_repos(tmp_path)] == ["alpha", "beta"]
 
 
+def test_load_repos_skips_dot_prefixed_directories(tmp_path):
+    """Hidden directories (e.g., .claude, .vscode) are ignored when scanning for repos."""
+    _repo(tmp_path, "beta")
+    _repo(tmp_path, "alpha")
+    # Create a hidden directory that is not a repo
+    (tmp_path / ".claude").mkdir()
+
+    assert [r.repo_id for r in load_repos(tmp_path)] == ["alpha", "beta"]
+
+
 def test_an_empty_repos_directory_is_an_error(tmp_path):
     with pytest.raises(RepoError, match="no repos"):
         load_repos(tmp_path)
