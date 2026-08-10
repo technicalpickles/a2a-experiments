@@ -1,0 +1,40 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0 auto;
+  padding: 1rem 2rem;
+  max-width: 60rem;
+}
+
+p.error {
+  color: crimson;
+}
+
+ol.log {
+  list-style: none;
+  padding: 0;
+}
+
+ol.log li {
+  margin: 0.25rem 0;
+  white-space: pre-wrap;
+}
+
+ol.log li.system {
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+
+aside.approval {
+  border: 1px solid darkorange;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  margin: 0.5rem 0;
+}
+
+aside.approval button {
+  margin-right: 0.5rem;
+}

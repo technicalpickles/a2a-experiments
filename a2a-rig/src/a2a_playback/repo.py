@@ -104,7 +104,7 @@ def load_repos(root: str | Path) -> list[Repo]:
     root = Path(root)
     if not root.is_dir():
         raise RepoError(f"{root}: not a directory")
-    homes = sorted(d for d in root.iterdir() if d.is_dir())
+    homes = sorted(d for d in root.iterdir() if d.is_dir() and not d.name.startswith("."))
     if not homes:
         raise RepoError(f"{root}: no repos — a rig serving nothing is a mistake")
     return [load_repo(home) for home in homes]
