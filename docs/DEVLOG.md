@@ -1595,3 +1595,61 @@ into the spec so implementers inherit the session's discoveries instead of re-ea
 them.
 
 Rig untouched. Next session: `writing-plans` for `direct-sessions`.
+
+## 2026-08-10 — direct-sessions ships: the cockpit's walking skeleton, subagent-driven
+
+Executed the `direct-sessions` plan (written this morning from the parked handoff,
+`docs/superpowers/plans/2026-08-10-direct-sessions.md`) via subagent-driven development:
+eight tasks, each with a fresh implementer and a task-scoped review, then a whole-branch
+review and the 👀 demo in a real Chrome. `a2a-orchestrator/` now exists: SQLite store,
+catalog index provider, management REST, the contextId-routed pass-through A2A proxy, an
+`orch-serve` CLI, and a Vite+React cockpit (mission list, chat pane, approval card over a
+genuine a2a-js client). 32 pytest tests, all driving real subprocesses — a playback rig
+serving `a2a-rig/repos/` with the service in front of it.
+
+Both open questions the handoff carried were settled by verification before the plan was
+written, and the wire confirmed both:
+
+- **The service mints contextIds.** a2a-sdk 1.1.2 (the version installed in a2acode's
+  venv) adopts a client-supplied `message.context_id` rather than replacing it
+  (`_check_or_generate_context_id`), so chat-open mints the id, the browser sends it on
+  turn one, and the upstream converges. `test_upstream_adopts_the_service_minted_context`
+  pins it on the wire.
+- **Cold resubscribe dissolved rather than solved.** The chat's proxied base is
+  `/a2a/chats/{contextId}/`, so the contextId rides the path and routing any call — a
+  `tasks/resubscribe` after a reload included — is a store lookup, never an inference
+  from observed traffic.
+
+The plan's verbatim-code approach mostly held (six of eight tasks were byte-for-byte
+transcriptions that passed review), and where it didn't, the review loop caught defects
+*in the plan's own listings*: the card-rewrite branch dropped headers in both directions
+(fixed: filtered passthrough, plus a `content-encoding` strip since httpx has already
+decoded the body being rewritten), the shell's error banner never cleared on success, and
+ChatPane never stopped consuming the stream on unmount (fixed: alive-flag ref; breaking
+a `for await` calls the generator's `.return()`). One task-1 surprise: the implementer
+quietly fixed a real a2a-rig bug — `load_repos()` choking on a `.claude/` harness
+artifact inside `repos/` — and the review made it its own commit with a regression test
+(`test_load_repos_skips_dot_prefixed_directories`; rig suite now 166 passed / 4 xfailed).
+
+The demo ran on the one-process origin (built frontend served statically at :9300):
+fresh mission → billing-api free text streamed (plan, tool events, diff rendered as
+text) → "please run the tests" parked the task and the approval card rendered from
+`a2acode_permission` metadata naming Bash and `pytest tests/ -q` → Allow resumed to
+completion → an infra-terraform chat rendered its default-play failure as a failed turn.
+Recorded to `~/Downloads/direct-sessions-demo.gif`. The approval answer round-trip also
+retired the one runtime question the reviews had deferred (whether a2a-js's
+empty-string-vs-absent `taskId` distinction matters on the wire: it doesn't).
+
+Final whole-branch review: ready to merge, no Critical/Important findings; next-touch
+notes recorded here so the workspace ledger can be deleted: wrap the proxy relay's
+upstream-connect failure in a 502 naming the upstream (it currently 500s opaquely),
+delete the frontend scaffold leftovers (`frontend/README.md`, `public/icons.svg`), add
+the `__init__.py` future import, and guard the `catch`-path `append` in ChatPane with
+the same alive check as the loop. Merged to main; PLAN.md Phase 6's consumer bullet
+stays unchecked until `e2e-suite`, per the milestone ladder.
+
+One process note: the worktree convention (`wt`) collided with the command sandbox —
+`~/worktrees` isn't writable in-sandbox, and a session of subagent file-writes there
+would have meant constant permission prompts — so the branch was worked in the primary
+checkout instead. Fine this time (the checkout was idle), worth remembering as the
+tradeoff it is.

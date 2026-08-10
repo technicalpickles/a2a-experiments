@@ -198,7 +198,12 @@ scripted plans that `--backend claude` cannot currently produce.
       The `repos` fixture resolves clients through the index, so tests are
       written against the same contract a real consumer uses.
 - [ ] **Start building the frontend and agents against this** — the rig is now their
-      standing dev environment.
+      standing dev environment. *(In progress: the `direct-sessions` milestone of
+      the a2a-orchestrator spec shipped 2026-08-10 — `a2a-orchestrator/` holds the
+      cockpit's walking skeleton: missions, the contextId-routed A2A proxy, and a
+      browser chat with approvals against the rig, 32 tests. Stays unchecked until
+      the spec's `e2e-suite` milestone lands; see
+      `docs/superpowers/plans/2026-08-10-direct-sessions.md` and DEVLOG.)*
 
 Done along the way: **`repo` and `scenario` were split.** One YAML had been
 carrying both an agent's identity and its script, a conflation inherited from
