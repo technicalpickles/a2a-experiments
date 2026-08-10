@@ -20,6 +20,14 @@ real `a2acode serve --cwd <worktree>` instances when it's being *used* rather th
 *built*. Nothing above the A2A seam can tell the difference — a2a-rig's founding bet,
 made load-bearing here.
 
+**a2a-rig is a checkpoint, not a co-evolving project.** It reached its exit (Phases 3–7
+complete, suite green); this work is the next thing, consuming it as-is. The split earns
+its keep because the two have different lifecycles — the rig is done-and-stable with its
+own separate future (M4: offering `playback`/`--record` upstream to a2acode), the cockpit
+is greenfield — and the boundary is cheap: HTTP, no shared code. Changes flow back into
+a2a-rig only when this work actually needs them (bugfixes; per-mission fidelity at
+`real-agents`, see Risks), not as a second roadmap.
+
 This spec settles the questions Phase 6's bullet opens. Its architectural decisions
 graduate into DESIGN-v3 once implemented, per this repo's convention that DESIGN-v3 is the
 plan of record. It also settles the open question carried in `.parkinglot`: **the consumer
@@ -188,7 +196,7 @@ a2a-orchestrator/
   frontend/                    # the cockpit: Vite + React + TS
     e2e/                       # Playwright (same toolchain as the frontend)
   catalog.yaml                 # where the repo agents are (rig index URL today)
-  recordings/                      # recorded chats, scrubbed, checked in
+  recordings/                  # recorded chats, scrubbed, checked in
   var/                         # runtime state: orchestrator.db (gitignored)
   tests/                       # pytest
   README.md                    # self-contained, like a2a-rig's
@@ -251,11 +259,28 @@ its repo, pause at recorded user turns and approvals per the pacing mode. No inf
 millisecond turns. A repo task failing marks the turn failed and skips its remaining steps.
 
 **Direct chats** need neither implementation, and don't touch the orchestrator agent at
-all: the
-browser's A2A client talks to the repo agent through the contextId-routed proxy, which
-relays unmodified and observes. Recording a direct chat captures only the user's turns and
-approval answers — the repo side is already scripted (rig) or real (production) — so replaying
-one is a convenience, not a necessity.
+all: the browser's A2A client talks to the repo agent through the contextId-routed proxy,
+which relays unmodified and observes. Recording a direct chat captures only the user's
+turns and approval answers — the repo side is already scripted (rig) or real (production)
+— so replaying one is a convenience, not a necessity.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (cockpit)
+    participant S as Service (proxy + REST)
+    participant R as Repo agent (billing-api)
+    B->>S: POST /api/missions/{m}/chats {agent: billing-api}
+    S-->>B: contextId
+    B->>S: A2A message (contextId, "what does this repo do?")
+    S->>R: relay (contextId → billing-api)
+    Note over S: observes: session → mission,<br/>recorder, approval inbox
+    R-->>S: stream: text, tool events…
+    S-->>B: relay (unmodified)
+    R-->>S: input-required (approval request)
+    S-->>B: relay → approval card
+    B->>S: A2A message (approval answer)
+    S->>R: relay (session resumes → completed)
+```
 
 **The recorder** tees live chats into `recordings/*.yaml`, scrubbed like Phase 7's recordings:
 shape kept, volatile identifiers (session ids, costs) dropped or rounded. Before the
