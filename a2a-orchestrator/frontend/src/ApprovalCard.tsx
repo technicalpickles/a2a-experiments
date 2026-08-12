@@ -1,4 +1,8 @@
-import type { Permission } from './a2a'
+export interface Permission {
+  tool: string
+  request_id: string
+  input: Record<string, unknown>
+}
 
 export function ApprovalCard({
   permission,
