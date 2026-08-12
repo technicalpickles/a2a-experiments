@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from a2a.types import StreamResponse, TaskState
 from ag_ui.core import (
     BaseEvent,
     CustomEvent,
+    RunAgentInput,
     RunErrorEvent,
     RunFinishedEvent,
     StepFinishedEvent,
@@ -32,6 +34,8 @@ from ag_ui.core import (
     ToolCallArgsEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
+    ToolMessage,
+    UserMessage,
 )
 from google.protobuf.json_format import MessageToDict
 
@@ -136,3 +140,35 @@ class RunTranslator:
             return []
         message_id, self._message_id = self._message_id, ""
         return [TextMessageEndEvent(message_id=message_id)]
+
+
+@dataclass
+class Turn:
+    """What a RunAgentInput asks of the upstream: say this, or answer that."""
+
+    kind: Literal["message", "resume"]
+    text: str
+
+
+def incoming_turn(run_input: RunAgentInput) -> Turn:
+    if not run_input.messages:
+        raise ValueError("run carried no messages")
+    last = run_input.messages[-1]
+    if isinstance(last, ToolMessage):
+        return Turn(kind="resume", text=_decision(last.content))
+    if isinstance(last, UserMessage) and last.content:
+        return Turn(kind="message", text=last.content)
+    raise ValueError(f"cannot act on a trailing {type(last).__name__}")
+
+
+def _decision(content: str | None) -> str:
+    parsed: Any = content
+    try:
+        parsed = json.loads(content or "")
+    except json.JSONDecodeError:
+        pass
+    if isinstance(parsed, dict):
+        parsed = parsed.get("decision")
+    if parsed not in ("allow", "deny"):
+        raise ValueError(f"tool result carried no decision: {content!r}")
+    return parsed

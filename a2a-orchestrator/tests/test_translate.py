@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from a2a.types import (
     Artifact,
     Message,
@@ -15,8 +16,9 @@ from a2a.types import (
     TaskStatus,
     TaskStatusUpdateEvent,
 )
+from ag_ui.core import RunAgentInput
 
-from a2a_orchestrator.translate import PERMISSION_TOOL, RunTranslator
+from a2a_orchestrator.translate import PERMISSION_TOOL, RunTranslator, Turn, incoming_turn
 
 
 def task_event(task_id="t1", context_id="c1"):
@@ -156,3 +158,70 @@ def test_unknown_payloads_pass_through_as_custom():
     translator = RunTranslator("th1", "r1")
     out = drain(translator, [StreamResponse()])
     assert types_of(out) == ["CUSTOM", "RUN_FINISHED"]
+
+
+def run_input(messages):
+    return RunAgentInput.model_validate(
+        {
+            "threadId": "th1",
+            "runId": "r1",
+            "state": None,
+            "messages": messages,
+            "tools": [],
+            "context": [],
+            "forwardedProps": None,
+        }
+    )
+
+
+def test_trailing_user_message_is_a_fresh_turn():
+    turn = incoming_turn(
+        run_input(
+            [
+                {"id": "m1", "role": "user", "content": "hello"},
+                {"id": "m2", "role": "assistant", "content": "hi"},
+                {"id": "m3", "role": "user", "content": "please run the tests"},
+            ]
+        )
+    )
+    assert turn == Turn(kind="message", text="please run the tests")
+
+
+def test_trailing_tool_result_is_a_resume():
+    turn = incoming_turn(
+        run_input(
+            [
+                {"id": "m1", "role": "user", "content": "please run the tests"},
+                {
+                    "id": "m2",
+                    "role": "tool",
+                    "toolCallId": "req-1",
+                    "content": '{"decision": "allow"}',
+                },
+            ]
+        )
+    )
+    assert turn == Turn(kind="resume", text="allow")
+
+
+def test_bare_string_decision_also_works():
+    turn = incoming_turn(
+        run_input(
+            [{"id": "m1", "role": "tool", "toolCallId": "req-1", "content": "deny"}]
+        )
+    )
+    assert turn == Turn(kind="resume", text="deny")
+
+
+def test_unknown_decision_refuses_loudly():
+    with pytest.raises(ValueError, match="decision"):
+        incoming_turn(
+            run_input(
+                [{"id": "m1", "role": "tool", "toolCallId": "req-1", "content": "maybe"}]
+            )
+        )
+
+
+def test_empty_run_refuses_loudly():
+    with pytest.raises(ValueError, match="no messages"):
+        incoming_turn(run_input([]))
