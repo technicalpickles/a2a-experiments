@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
   CopilotChat,
   CopilotKitProvider,
@@ -44,12 +44,29 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
     }),
     [chat.context_id],
   )
+  // CopilotChat swallows RUN_ERROR (AG-UI's failure event) into a console
+  // log by default — no in-flow trace. onError is scoped to this chat's
+  // agentId, so it only fires for runs this pane actually started. No cheap
+  // hook clears it on the next run (see report), so the banner is sticky
+  // until the chat is remounted.
+  const [runError, setRunError] = useState('')
   return (
     <section>
       <h2>{chat.agent}</h2>
+      {runError && <p className="error">run failed: {runError}</p>}
       <CopilotKitProvider agents__unsafe_dev_only={agents}>
         <PermissionTool />
-        <CopilotChat agentId={chat.context_id} threadId={chat.context_id} />
+        <CopilotChat
+          agentId={chat.context_id}
+          threadId={chat.context_id}
+          onError={(event) => {
+            // CopilotChatProps["onError"] is typed as a union with the plain
+            // DOM `onError` (HTMLAttributes<HTMLDivElement> carries one too,
+            // for <img>/<video> children) — narrow to CopilotKit's own shape
+            // before reading `.error`.
+            if ('error' in event) setRunError(String(event.error?.message ?? event.error))
+          }}
+        />
       </CopilotKitProvider>
     </section>
   )
