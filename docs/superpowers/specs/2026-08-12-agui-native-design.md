@@ -160,6 +160,36 @@ speculatively.
   unaffected — it captures the conversation's shape, which the translator sees more
   legibly than the proxy ever did.
 
+## Domain model: borrowed where possible, owned where necessary
+
+The store's schema does not change — missions and chats, two tables, exactly as
+shipped. The audit of what's ours versus the protocols':
+
+- **Ours, and staying:** `Mission` (no protocol has a coordination unit spanning agent
+  conversations) and `Chat` (not a thread — the join entity binding mission + agent +
+  upstream_url to a conversation). The leverage is in the identifier: `context_id` is
+  one id playing three roles — our primary key, A2A's `contextId`, AG-UI's `threadId`.
+  The catalog entry (`{name, description, card_url}`) also stays: A2A standardizes the
+  card, not multi-agent discovery, so a minimal index pointer is a necessary invention.
+- **Ours, and dying:** `ChatEvent` (a2a.ts's private event vocabulary — AG-UI is the
+  standardized version of exactly that distillation) and `LogItem` (ChatPane's
+  who-said-it triple, replaced by AG-UI message roles and CopilotKit rendering).
+- **Borrowed wholesale:** runs (`runId`, per turn, never persisted), tasks (`taskId`,
+  parked in memory), and the permission payload (a2acode's shape, verbatim).
+- **The one contract we mint:** AG-UI leaves frontend tool names and result shapes to
+  the app, so `request_permission` is our only new wire vocabulary. Name:
+  `request_permission`. Args: the `a2acode_permission` payload verbatim. Result:
+  `{decision: "allow" | "deny"}` — the inbound translate function maps it to the
+  resume text upstream expects. Nothing else about it is ours.
+
+**History is advisory; the tail is the message.** AG-UI's client-sends-full-history
+design assumes a stateless agent backend. Ours is stateful — A2A's `contextId` means
+a2acode holds the real conversation (the Claude session). So the service reads
+`RunAgentInput.messages` only for the new tail, stores no message history, and the
+schema stays two tables. When persistence arrives (recording milestone, reload
+replay), the log format is AG-UI events — the standard shape the translator already
+emits — not a third vocabulary.
+
 ## Decisions
 
 - **The browser speaks AG-UI; the reversal, accounted for.** The 2026-08-09 spec chose
@@ -271,6 +301,12 @@ inference, sub-second.
   holds the A2A stream and the parked-task state, so reconnect is an AG-UI-side concern
   only — simplest is replaying the chat's event log from the store on reconnect, which
   the recording milestone wants anyway. Deferred until it bites.
+- **The message gap, acknowledged.** No message history is persisted anywhere in this
+  milestone: the browser's render log lives in CopilotKit state and a reload loses it,
+  even though the upstream conversation survives via `contextId`. Accepted for now —
+  the fix is the AG-UI event log named under "History is advisory," and it is a
+  tracked followup (taskwarrior `fc4eb2d8`, project `a2a-experiments`), not a
+  someday note.
 - **Python AG-UI SDK maturity.** The `ag-ui-protocol` package (event types + encoder) is
   young. Exposure is small — we emit events over SSE and need none of its agent
   abstractions — and the event vocabulary is the protocol's stable core. Pin exact
