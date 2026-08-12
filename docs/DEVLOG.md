@@ -1695,3 +1695,69 @@ cockpit work; carrying the chosen option back is a2acode work, and without the u
 channel the prettiest card in the world still can't answer. Live-rendering polish notes
 from the handoff (choppy artifact chunking) didn't materialize as complaints; parking
 lot's other carried questions stay carried.
+
+## 2026-08-12 — agui-native ships: the reversal, the research that paid for itself, and a table that survived reality
+
+The afternoon took the morning's cockpit and swapped its conversation plane out from
+under it. The 2026-08-12 spec reversed one decision of the 2026-08-09 spec — the browser
+stops speaking A2A and speaks AG-UI (CopilotKit), the service becomes the A2A client —
+and by end of day it was merged (`59950f6`), demoed in Chrome, and reference-run against
+a live Claude. 51 tests, was 34 this morning.
+
+The spec grew three amendments during review before any code: the seam is two-way
+(`RunAgentInput` → new-message-or-resume is the trickier half and got its own tested
+function), the parked task lives in an in-memory dict (not a store column — same deferral
+class as reload replay), and a domain audit that ended with "no schema change." The audit's
+sleeper: AG-UI's client-sends-full-history design assumes a stateless agent, ours isn't —
+a2acode holds the conversation via `contextId` — so the service reads only the tail and
+stores nothing. The message gap (reload loses the render log) is acknowledged and tracked
+(taskwarrior `fc4eb2d8`).
+
+Research before implementation corrected three hand-imagined assumptions at zero cost:
+CopilotKit "v2" is the `/v2` subpath of the 1.x package (react-ui is v1 and unneeded);
+HITL is `useHumanInTheLoop`, not v1's `renderAndWaitForResponse`; and — decisive for the
+design — registry agents are per-key singletons, so the spec's "one logical agent name"
+would have made panes clobber each other's thread. Each chat now registers its own
+`HttpAgent` under its `context_id`. The AG-UI side was verified against the extracted
+0.1.19 wheel rather than docs; the encoder is four lines and the event constructors are
+exactly what they claim.
+
+Subagent-driven execution, five review gates, three fix rounds worth recording:
+multimodal `UserMessage.content` would have slipped a list into `Turn.text` (now refused
+loudly); the endpoint's failure boundary didn't structurally cover the store lookup and
+could strand an open text frame (now `RunTranslator.abort()` + a widened try — the
+invariant "every failure lands inside the run as RUN_ERROR" is structural, not aspirational);
+and the final review caught that a fresh message while an approval was parked would clear
+the park — a guard the old `ChatPane` had (disabled input) that didn't survive the swap.
+The park is now replaced or consumed, never incidentally dropped, and the stale card
+stays answerable.
+
+Browser validation (delegated to a subagent driving Chrome) passed hello/allow/deny/
+second-chat on the first try and found the one thing pytest couldn't: **a failed run
+rendered as literally nothing** — CopilotChat consumes RUN_ERROR into an `onError`
+callback and paints no default UI. Indistinguishable from thinking, short of devtools.
+One `onError` → red banner fix later, infra-terraform's scripted failure reads
+`run failed: …` like it should. Also observed: plan/diff artifacts concatenate into a
+wall of text (taskwarrior `13f576dc`), and STEP_*/CUSTOM events are consumed-but-invisible
+in CopilotKit's default rendering — narration is on the wire, unrendered for now.
+
+The reference run was the day's quiet triumph: four live turns against `a2acode serve
+--backend claude` through the new plane — streaming, narration-as-steps, a real Bash
+write gate parking as a `request_permission` tool call with a2acode's `request_id` as the
+`toolCallId`, the allow decision riding back as a `ToolMessage`, and the file actually
+landing on disk. Zero CUSTOM passthroughs across all four captures: the hand-imagined
+translation table needed **no corrections**. After Phase 7's recordings-corrected-us-twice
+lesson, that's the first table to survive contact with a real producer unchanged — credit
+to it being derived from a2a.ts's shipped distillation rather than imagination.
+
+Deletions landed last, per the strangler bullet: `proxy.py`, the card rewrite and its
+load-bearing trailing slash, `a2a.ts`, `ChatRef.a2a_url`, `@a2a-js/sdk`. The working
+browser A2A client exists only in git history now, as the spec said it would. One
+operational gotcha for next time: the morning's orch-serve was still holding :9300 and
+answered `/agui/run` with a 405 from its static mount — check `lsof` before trusting a
+demo stack.
+
+Followups in taskwarrior: message persistence as AG-UI event log (`fc4eb2d8`), plan/diff
+rich rendering (`13f576dc`), Playwright through the new plane (`d798cf14`), and a
+hardening batch (truncated-stream-as-success, toolCallId verification on resume, client
+cache eviction) that resolves with the event-log work.
