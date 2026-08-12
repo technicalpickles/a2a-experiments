@@ -156,7 +156,7 @@ def incoming_turn(run_input: RunAgentInput) -> Turn:
     last = run_input.messages[-1]
     if isinstance(last, ToolMessage):
         return Turn(kind="resume", text=_decision(last.content))
-    if isinstance(last, UserMessage) and last.content:
+    if isinstance(last, UserMessage) and isinstance(last.content, str) and last.content:
         return Turn(kind="message", text=last.content)
     raise ValueError(f"cannot act on a trailing {type(last).__name__}")
 

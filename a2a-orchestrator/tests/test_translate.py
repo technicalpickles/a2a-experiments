@@ -225,3 +225,12 @@ def test_unknown_decision_refuses_loudly():
 def test_empty_run_refuses_loudly():
     with pytest.raises(ValueError, match="no messages"):
         incoming_turn(run_input([]))
+
+
+def test_multimodal_user_message_refuses_loudly():
+    with pytest.raises(ValueError, match="cannot act on"):
+        incoming_turn(
+            run_input(
+                [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "hi"}]}]
+            )
+        )
