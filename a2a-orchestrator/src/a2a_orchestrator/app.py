@@ -12,7 +12,8 @@ from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from a2a_orchestrator import api, proxy
+from a2a_orchestrator import agui, api, proxy
+from a2a_orchestrator.a2a_client import Conversations
 from a2a_orchestrator.catalog import Catalog
 from a2a_orchestrator.store import Store
 
@@ -29,6 +30,7 @@ def build_app(
         timeout = httpx.Timeout(120.0, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as http:
             app.state.http = http
+            app.state.conversations = Conversations(http)
             yield
 
     routes = [
@@ -42,6 +44,7 @@ def build_app(
             proxy.a2a_endpoint,
             methods=["GET", "POST"],
         ),
+        Route("/agui/run", agui.run_agent, methods=["POST"]),
     ]
     if frontend_dist and frontend_dist.is_dir():
         routes.append(Mount("/", StaticFiles(directory=frontend_dist, html=True)))
