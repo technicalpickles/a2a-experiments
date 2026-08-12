@@ -1,21 +1,26 @@
 # Upstream issues to file
 
 Findings from this project that belong in someone else's repo, and what to say when filing
-them. Six filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
+them. Seven filed so far: `70dc7c04` → [a2acode#37](https://github.com/kanywst/a2acode/issues/37),
 `79297b49`+`167506a4` → [a2a-python#1170](https://github.com/a2aproject/a2a-python/issues/1170)
 with repro PR [#1171](https://github.com/a2aproject/a2a-python/pull/1171), `5dcde5fb` →
 [a2acode#38](https://github.com/kanywst/a2acode/issues/38), `f010f63e` →
 [a2acode#39](https://github.com/kanywst/a2acode/issues/39), `e653db90` →
-[a2acode#40](https://github.com/kanywst/a2acode/issues/40), and `777656ed` →
-[a2acode#41](https://github.com/kanywst/a2acode/issues/41). The rest are drafts.
+[a2acode#40](https://github.com/kanywst/a2acode/issues/40), `777656ed` →
+[a2acode#41](https://github.com/kanywst/a2acode/issues/41), and `b0cefb1a` →
+[a2acode#49](https://github.com/kanywst/a2acode/issues/49). The rest are drafts.
 
-> **Refreshed 2026-08-12.** All five a2acode issues are now **CLOSED, fixed and merged**
-> (PRs #42-#46, all merged 2026-08-09 — see each section below for which PR closed which
-> issue). None of that has shipped in a release: a2acode's latest tag is still `v0.6.2`
-> (2026-08-02), and `origin/main` is 55 commits ahead of it as of this check. a2a-rig still
-> pins `v0.6.2`, so none of these fixes are in the version we actually run against yet.
-> `a2a-python#1170` is still **open** — see the a2a-sdk section below, a different PR turned
-> out to be the one that matters.
+> **Refreshed 2026-08-12 (second pass).** All five originally-filed a2acode issues are
+> **CLOSED, fixed and merged** (PRs #42-#46, all merged 2026-08-09 — see each section below for
+> which PR closed which issue). A sixth, `34c83f8c` (input-required cancel), turned out to
+> already be resolved by the same wave (`#43`'s second commit) and was never separately filed;
+> closed as resolved-by-upstream instead. A seventh, `b0cefb1a` (`AskUserQuestion`
+> unanswerable), was re-derived and filed fresh as
+> [a2acode#49](https://github.com/kanywst/a2acode/issues/49). None of the merged fixes have
+> shipped in a release: a2acode's latest tag is still `v0.6.2` (2026-08-02), and `origin/main`
+> is 40 commits ahead of it as of this check. a2a-rig still pins `v0.6.2`, so none of these
+> fixes are in the version we actually run against yet. `a2a-python#1170` is still **open** —
+> see the a2a-sdk section below, a different PR turned out to be the one that matters.
 
 **Writing the issue is what verifies the note.** All five filings turned up claims here that
 were wrong or incomplete, and one (the stale-read mechanism, below) would have been a public
@@ -295,7 +300,7 @@ the double-emit disclosure (redundant, not conflicting), and end on the direct a
 
 ### A task parked in `input-required` cannot be cancelled
 
-**Task:** `34c83f8c`
+**Task:** `34c83f8c` (closed, resolved by upstream — see below)
 
 a2acode parks by *returning* from `execute()` (the "Paused on a permission request; keep the
 stream for the follow-up" path), keeping the `BackendSession` alive out of band. That's
@@ -306,15 +311,19 @@ Also worth mentioning in the same issue: **cancel is only tested at the `Backend
 level, never end to end over the protocol.** That's why this survived 163 tests. Offering that
 observation alongside the bug is more useful than the bug alone.
 
-> **Update 2026-08-12: probably fixed a2acode-side already, unverified.** The maintainer's
-> close comment on [#38](https://github.com/kanywst/a2acode/issues/38) says PR
-> [#43](https://github.com/kanywst/a2acode/pull/43) covers "a second half: cancelling a task
-> already paused on a permission left it in `input-required` for the same reason" — which is
-> this exact finding, never separately filed. Worth re-deriving against current `main` before
-> either filing this or closing `34c83f8c`: if #43 genuinely closes it, there's nothing left to
-> file here on the a2acode side, but the `79297b49`/`167506a4` question ("what does 'the
-> producer returned' mean upstream") is still open on a2a-python's side regardless — see the
-> refreshed a2a-sdk section above.
+> **Resolved 2026-08-12, re-derived against current `main` (`b36a645`).** The maintainer's
+> close comment on [#38](https://github.com/kanywst/a2acode/issues/38) was right: PR
+> [#43](https://github.com/kanywst/a2acode/pull/43), specifically commit `1d1a0c6` ("close out
+> a task cancelled while paused too"), is exactly this fix. `executor.py`'s `cancel()` now
+> checks `session is None or session.is_parked` and, when true, writes the terminal state
+> itself before closing the session, since a parked session has no `_pump` left to do it. Two
+> tests cover it directly, `test_cancelling_a_paused_task_writes_its_terminal_state` and
+> `test_cancelling_a_running_task_leaves_the_state_to_its_pump`, both pass against current
+> `main`. Nothing left to file on the a2acode side. Confirmed not just by reading the diff but
+> by running `uv run pytest tests/test_executor.py -k cancel` against a synced `origin/main`
+> checkout. The `79297b49`/`167506a4` question ("what does 'the producer returned' mean
+> upstream") is still open on a2a-python's side regardless — see the refreshed a2a-sdk section
+> above.
 
 ### The claude backend can no longer emit a `plan` event at all
 
@@ -587,7 +596,21 @@ naturally with the dropped-tool-arguments finding above — both are `events_fro
 
 ### The claude backend cannot answer `AskUserQuestion` — allow arrives with no answers
 
-**Task:** `b0cefb1a` · **Cockpit half:** `d6465f5e`
+**FILED 2026-08-12:** [kanywst/a2acode#49](https://github.com/kanywst/a2acode/issues/49), which
+is the body of record.
+
+**Task:** `b0cefb1a` (done) · **Cockpit half:** `d6465f5e`
+
+**Re-derived 2026-08-12 against current `main` (`b36a645`) before filing, per the doc's own
+discipline.** Everything below held, with one addition: `PermissionDecision` now also carries
+`option_id` (new since the ACP multi-option fix, [#41](https://github.com/kanywst/a2acode/issues/41)/PR
+[#45](https://github.com/kanywst/a2acode/pull/45), landed after this finding was first
+written). It doesn't help here — `claude.py`'s `can_use_tool` never reads it, only
+`decision.allow` — but it's evidence the fix shape asked for below (a richer
+`PermissionDecision`) is exactly the kind of change the maintainer has already been willing to
+make. Also confirmed the blind spot directly: `tests/test_claude_backend.py:362` is the only
+test that reaches `drive()`, and it passes `can_use_tool=lambda *a: None`, so the real closure
+that builds `PermissionResultAllow()` has zero coverage.
 
 **Found 2026-08-12**, first live cockpit run against `--backend claude` (no `--permission-mode`,
 the instructive path). Prompted with "add a /health endpoint and run the tests" against a repo
@@ -775,11 +798,17 @@ evidenced finding independent of the still-open cancel question.
 So the queue now starts at step 1 above — the a2a-sdk cancel pair, still the only unresolved
 item of the six filed.
 
-**Refreshed 2026-08-12: all five a2acode issues (`#37`-`#41`) are closed, fixed, merged
-2026-08-09 — none released yet (`v0.6.2` still latest tag).** See the "MERGED" callout in each
-section above for the closing PR. `a2a-python#1170` is the one still open, and the PR that will
-actually close it is [#1172](https://github.com/a2aproject/a2a-python/pull/1172), not our
+**Refreshed 2026-08-12 (second pass): six of seven a2acode findings are resolved.** The five
+originally-filed issues (`#37`-`#41`) are closed, fixed, merged 2026-08-09 — none released yet
+(`v0.6.2` still latest tag, `origin/main` 40 commits ahead). See the "MERGED" callout in each
+section above for the closing PR. `34c83f8c` (input-required cancel) turned out to already be
+fixed by the same wave (`#43`'s second commit, `1d1a0c6`) and needed no separate filing — closed
+as resolved-by-upstream after re-deriving against current `main` and confirming both of its
+tests pass. `b0cefb1a` (`AskUserQuestion` unanswerable) was re-derived fresh and filed as
+[a2acode#49](https://github.com/kanywst/a2acode/issues/49). `a2a-python#1170` is the one still
+open, and the PR that will actually close it is
+[#1172](https://github.com/a2aproject/a2a-python/pull/1172), not our
 [#1171](https://github.com/a2aproject/a2a-python/pull/1171) — see the refreshed a2a-sdk section
-above. Remaining unfiled: `438d9c1c` (ACP cost ceiling, deliberately low priority), `cc7feef9`
-(a2a-cli fork, not filing per the 2026-08-08 decision), and the two drafts not yet re-derived
-(`b0cefb1a`/`d6465f5e`, the `AskUserQuestion` finding, found 2026-08-12).
+above. Remaining unfiled: `438d9c1c` (ACP cost ceiling, deliberately low priority) and
+`cc7feef9` (a2a-cli fork, not filing per the 2026-08-08 decision). `d6465f5e` (the cockpit half
+of the `AskUserQuestion` finding) is separate rig work, not an upstream filing, and stays open.
