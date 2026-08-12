@@ -509,6 +509,56 @@ name an option id, falling back to the current allow/deny resolution when it doe
 naturally with the dropped-tool-arguments finding above — both are `events_from_update` /
 `request_permission` losing detail that ACP already handed over.
 
+### The claude backend cannot answer `AskUserQuestion` — allow arrives with no answers
+
+**Task:** `b0cefb1a` · **Cockpit half:** `d6465f5e`
+
+**Found 2026-08-12**, first live cockpit run against `--backend claude` (no `--permission-mode`,
+the instructive path). Prompted with "add a /health endpoint and run the tests" against a repo
+whose test suite turned out not to exist, Claude did the right thing: called `AskUserQuestion`
+to ask how to proceed. The question *reached* the A2A caller intact — `AskUserQuestion` routes
+through `can_use_tool` like any other tool, so the task parked `input-required` and the
+`a2acode_permission` metadata carried the full `questions` array (question text, headers,
+options, `multiSelect`). Then the round trip dead-ends:
+
+- The caller's answer runs through `_decision` (`executor.py:501-506`), which lowercases the
+  resume text and checks it against allow-words. Everything collapses to
+  `PermissionDecision(allow: bool)`.
+- `claude.py:194-195` turns an allow into a bare `PermissionResultAllow()` — no
+  `updated_input`.
+- The CLI synthesizes the tool result **"The user did not answer the questions."** and the
+  agent continues unanswered. In our run it left the change as-is and said so; the turn's
+  question was simply wasted.
+
+**The SDK contract** (re-derived 2026-08-12 from
+[the Agent SDK user-input docs](https://code.claude.com/docs/en/agent-sdk/user-input.md);
+`PermissionResultAllow.updated_input` confirmed in `types.py:235-240` of the vendored SDK):
+answering requires
+
+```python
+PermissionResultAllow(updated_input={
+    "questions": tool_input["questions"],          # pass-through
+    "answers": {"<question text>": "<chosen label>"},  # list or comma-join for multiSelect
+})
+```
+
+with an optional `"response"` free-text field when the caller dismisses the structured
+questions. See also anthropics/claude-agent-sdk-python#327 and anthropics/claude-code#20275
+for the documentation history.
+
+**Why this one bites harder than the other permission gaps:** it's not an exotic tool. An
+un-steered Claude reaches for `AskUserQuestion` whenever the task is ambiguous, and the
+instructive path (no `--permission-mode`) guarantees the gate. Today every clarifying question
+a claude-backend agent asks over A2A is unanswerable — allow and deny both leave it unanswered;
+they only vary the flavor of shrug.
+
+**Fix shape:** `PermissionDecision` needs a payload channel, not just a bool — e.g. the resume
+message's metadata (mirroring `a2acode_permission` inbound) carrying an object the claude
+backend forwards as `updated_input`. This is the same structural gap as "A binary
+`PermissionDecision` flattens ACP's multi-option gates" above and "Permission deny discards the
+caller's text" — three findings, one boolean pipe. A single richer decision type (option id /
+updated-input / message) closes all three.
+
 ### M4: offer `playback` and `--record` upstream
 
 **Not a bug — the planned contribution.** DESIGN-v3 §7-8. `a2a_playback` is written to drop
