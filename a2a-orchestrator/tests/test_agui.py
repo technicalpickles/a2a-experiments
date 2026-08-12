@@ -130,6 +130,53 @@ async def test_unbound_thread_is_a_run_error(http, service_url):
     assert "deadbeef" in events[-1]["message"]
 
 
+async def test_fresh_message_while_parked_leaves_the_card_answerable(
+    mission, open_chat, http, service_url
+):
+    chat = await open_chat(mission["id"], "billing-api")
+    parked = await run(
+        http, service_url, chat["context_id"], user_says("please run the tests")
+    )
+    call_id = next(e["toolCallId"] for e in parked if e["type"] == "TOOL_CALL_START")
+
+    fresh = await run(
+        http, service_url, chat["context_id"], user_says("hello from the cockpit")
+    )
+    assert types_of(fresh)[-1] == "RUN_FINISHED"
+
+    resumed = await run(
+        http,
+        service_url,
+        chat["context_id"],
+        [
+            {
+                "id": uuid.uuid4().hex,
+                "role": "tool",
+                "toolCallId": call_id,
+                "content": json.dumps({"decision": "allow"}),
+            }
+        ],
+    )
+    assert types_of(resumed)[-1] == "RUN_FINISHED"
+    assert not [e for e in resumed if e["type"] == "RUN_ERROR"]
+
+
+async def test_two_chats_route_to_their_own_repos(mission, open_chat, http, service_url):
+    billing = await open_chat(mission["id"], "billing-api")
+    checkout = await open_chat(mission["id"], "checkout-web")
+
+    billing_events = await run(
+        http, service_url, billing["context_id"], user_says("what is this repo?")
+    )
+    checkout_events = await run(
+        http, service_url, checkout["context_id"], user_says("what is this repo?")
+    )
+
+    assert "Ready when you are" in text_of(billing_events)
+    assert "checkout flow" in text_of(checkout_events)
+    assert billing["context_id"] != checkout["context_id"]
+
+
 async def test_resume_with_nothing_parked_is_a_run_error(
     mission, open_chat, http, service_url
 ):

@@ -4,10 +4,14 @@ One run per turn. RUN_STARTED is emitted before upstream is contacted so
 every failure after it — unknown thread, refused turn, upstream fault —
 lands inside the run as RUN_ERROR rather than as a broken transport. The
 park/clear decision happens here, after the translator has seen the whole
-turn: parked permission -> remember the taskId, anything else -> forget it.
+turn: parked permission -> remember the taskId; a consumed resume that
+didn't re-park -> forget it; a fresh message that didn't park -> leave any
+existing park alone, since it wasn't this turn's to drop.
 """
 
 from __future__ import annotations
+
+import logging
 
 from ag_ui.core import RunAgentInput, RunErrorEvent, RunStartedEvent
 from ag_ui.encoder import EventEncoder
@@ -15,6 +19,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 from a2a_orchestrator.translate import RunTranslator, incoming_turn
+
+logger = logging.getLogger(__name__)
 
 
 async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
@@ -48,13 +54,19 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
             for out in translator.finish():
                 yield encoder.encode(out)
         except Exception as exc:  # every failure must reach the stream as RUN_ERROR
+            logger.exception(
+                "run %s on thread %s failed", run_input.run_id, run_input.thread_id
+            )
             for out in translator.abort():
                 yield encoder.encode(out)
             yield encoder.encode(RunErrorEvent(message=str(exc)))
             return
+        # The park is replaced or consumed, never incidentally dropped — a
+        # fresh message while an approval is pending leaves the card
+        # answerable.
         if translator.parked and translator.task_id:
             conversations.park(chat.context_id, translator.task_id)
-        else:
+        elif turn.kind == "resume":
             conversations.clear(chat.context_id)
 
     return StreamingResponse(stream(), media_type=encoder.get_content_type())
