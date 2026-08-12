@@ -1653,3 +1653,45 @@ One process note: the worktree convention (`wt`) collided with the command sandb
 would have meant constant permission prompts — so the branch was worked in the primary
 checkout instead. Fine this time (the checkout was idle), worth remembering as the
 tradeoff it is.
+
+## 2026-08-12 — first live run: a real Claude behind the cockpit, and the question nobody could answer
+
+Josh drove the rig demo himself this time (one-process mode at :9300) — every beat from the
+2026-08-10 GIF reproduced by hand: streamed text, tool events, the plan checklist, the diff,
+the approval round trip both ways, infra-terraform's scripted failure. That closed Part 1 of
+the handoff; Part 2 was pointing the same cockpit at a live agent.
+
+The blocker was discovery: the catalog only spoke rig-index (`GET /`), and a lone a2acode
+serves a card but no index. Went with the static provider over an index shim (less moving
+parts; the provider seam existed for exactly this): `provider: static` inlines the same
+entry shape in catalog.yaml, `repos()`/`resolve()` work identically with no HTTP. TDD'd on
+branch `static-catalog` (`7321bf8`, 34 tests green), plus `catalog-live.yaml` pointing at
+a2acode's default port — which turned out to be 9100, accidentally completing the port
+ladder (a2acode 9100, rig 9200, orch 9300).
+
+The live run itself: `a2acode serve --backend claude --cwd ~/scratch/demo-app`, no
+`--permission-mode`, subscription auth. Prompts, streaming, and plain tool approvals all
+worked through the proxy unchanged — the card rewrite plus contextId routing was genuinely
+all the translation a real agent needed.
+
+Then the find of the day. "Add a /health endpoint and run the tests" ran into demo-app
+having no test suite (only stale `.pyc`s from a deleted `test_app.py` — the live Claude
+disassembled a pyc with `marshal`+`dis` to reconstruct what the tests used to cover, which
+is more archaeology than $0.30 usually buys). So it did the right thing: asked, via
+`AskUserQuestion`. The cockpit showed the generic approval card — tool name, raw input
+JSON, Allow/Deny — and allowing produced the tool result "The user did not answer the
+questions." The question had reached the browser (it's right there in the
+`a2acode_permission` input blob); there was just no way to answer it. Root cause is
+a2acode's boolean permission pipe: `_decision` collapses the resume text to allow/deny and
+the claude backend returns a bare `PermissionResultAllow()`, never using the SDK's
+`updated_input` — which is exactly where answers must ride
+(`{"questions": <passthrough>, "answers": {question: label}}`, per the Agent SDK
+user-input docs, re-derived same day). Full lead in UPSTREAM.md, filed alongside its ACP
+sibling (the binary-`PermissionDecision` entry): three permission findings now trace to
+the same boolean pipe.
+
+The split that matters for what's next: rendering the question as a real question card is
+cockpit work; carrying the chosen option back is a2acode work, and without the upstream
+channel the prettiest card in the world still can't answer. Live-rendering polish notes
+from the handoff (choppy artifact chunking) didn't materialize as complaints; parking
+lot's other carried questions stay carried.
