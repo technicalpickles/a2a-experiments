@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@a2a-js/sdk": "^1.0.1",
     "@ag-ui/client": "^0.0.57",
     "@copilotkit/react-core": "^1.67.1",
     "react": "^19.2.8",

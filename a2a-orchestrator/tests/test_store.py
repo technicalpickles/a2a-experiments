@@ -46,7 +46,6 @@ def test_create_chat_mints_unique_context_ids(tmp_path):
     second = store.create_chat(mission.id, "billing-api", BILLING)
 
     assert first.context_id != second.context_id
-    assert first.a2a_url == f"/a2a/chats/{first.context_id}/"
 
 
 def test_chat_lookup_by_context(tmp_path):

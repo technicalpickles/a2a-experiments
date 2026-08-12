@@ -1,1 +1,1 @@
-"""The cockpit's service half: management REST plus a pass-through A2A proxy."""
+"""The cockpit's service half: management REST plus the AG-UI run route."""

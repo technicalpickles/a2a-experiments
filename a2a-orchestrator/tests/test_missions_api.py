@@ -53,7 +53,6 @@ async def test_open_chat_binds_and_returns_the_context(
     chat = await open_chat(mission["id"], "billing-api")
 
     assert chat["agent"] == "billing-api"
-    assert chat["a2a_url"] == f"/a2a/chats/{chat['context_id']}/"
 
     listed = (await http.get(f"{service_url}api/missions")).json()["missions"]
     mine = next(m for m in listed if m["id"] == mission["id"])
