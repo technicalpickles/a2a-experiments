@@ -1761,3 +1761,20 @@ Followups in taskwarrior: message persistence as AG-UI event log (`fc4eb2d8`), p
 rich rendering (`13f576dc`), Playwright through the new plane (`d798cf14`), and a
 hardening batch (truncated-stream-as-success, toolCallId verification on resume, client
 cache eviction) that resolves with the event-log work.
+
+## 2026-08-12 — addendum: plural, live, in the browser
+
+The question that closed the day: "have we pointed it at real a2acodes yet?" The honest
+answer at merge time was one-at-a-time and only via curl on the new plane. So: a second
+scratch repo (`~/scratch/demo-notes`), a second `a2acode serve` on 9101, a second entry
+in `catalog-live.yaml`, and a browser-driven mission spanning both. demo-app answered a
+question about itself (~10s to first text); demo-notes hit a Bash write gate, the
+approval card rendered with the real command, Allow completed the run, and the note
+landed on disk saying "two live agents, one mission." Thread isolation held on remount —
+the demo-app pane came back empty (no replay yet, per the message gap) but with zero
+bleed from its sibling. Console clean. GIF: `multi_live_mission.gif`.
+
+The multi-live topology needed nothing new — the static provider's one-entry-per-process
+shape just pluralized, which is what DESIGN-v3's one-process-many-repos ↔
+one-process-per-repo interchangeability promised. The empty-on-remount pane is now the
+most visible argument for the event-log followup (`fc4eb2d8`).
