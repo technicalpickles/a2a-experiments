@@ -13,17 +13,7 @@ p.error {
   color: crimson;
 }
 
-ol.log {
-  list-style: none;
-  padding: 0;
-}
-
-ol.log li {
-  margin: 0.25rem 0;
-  white-space: pre-wrap;
-}
-
-ol.log li.system {
+p.approval-done {
   opacity: 0.6;
   font-size: 0.9em;
 }

@@ -19,7 +19,6 @@ def _chat_json(chat: Chat) -> dict:
         "context_id": chat.context_id,
         "mission_id": chat.mission_id,
         "agent": chat.agent,
-        "a2a_url": chat.a2a_url,
         "created_at": chat.created_at,
     }
 

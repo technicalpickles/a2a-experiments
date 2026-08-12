@@ -1,108 +1,73 @@
-import { useEffect, useRef, useState } from 'react'
-import type { Client } from '@a2a-js/sdk/client'
+import { useMemo, useState } from 'react'
+import {
+  CopilotChat,
+  CopilotKitProvider,
+  HttpAgent,
+  useHumanInTheLoop,
+} from '@copilotkit/react-core/v2'
+import '@copilotkit/react-core/v2/styles.css'
 import type { ChatRef } from './api'
-import { connect, sendTurn, type Permission } from './a2a'
-import { ApprovalCard } from './ApprovalCard'
+import { ApprovalCard, type Permission } from './ApprovalCard'
 
-interface LogItem {
-  who: 'you' | 'agent' | 'system'
-  text: string
-}
-
-interface PendingApproval {
-  taskId: string
-  permission: Permission
+// request_permission is the one wire contract the cockpit mints (spec: Domain
+// model): args are a2acode's permission payload verbatim, the result is
+// {decision}. respond() resolves into a role:"tool" message and CopilotKit
+// fires the follow-up run; the service resumes the parked task from it.
+function PermissionTool() {
+  useHumanInTheLoop({
+    name: 'request_permission',
+    description: 'Ask the user to allow or deny a tool use',
+    render: ({ args, status, respond }) => {
+      if (status === 'complete') return <p className="approval-done">answered</p>
+      if (status !== 'executing') return <></>
+      return (
+        <ApprovalCard
+          permission={args as unknown as Permission}
+          onAnswer={(decision) => respond?.({ decision })}
+        />
+      )
+    },
+  })
+  return null
 }
 
 export function ChatPane({ chat }: { chat: ChatRef }) {
-  const clientRef = useRef<Promise<Client> | null>(null)
-  const [log, setLog] = useState<LogItem[]>([])
-  const [approval, setApproval] = useState<PendingApproval | null>(null)
-  const [draft, setDraft] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  if (clientRef.current === null) clientRef.current = connect(chat.a2a_url)
-
-  const aliveRef = useRef(true)
-  useEffect(() => {
-    aliveRef.current = true
-    return () => { aliveRef.current = false }
-  }, [])
-
-  const append = (item: LogItem) => setLog((prev) => [...prev, item])
-
-  // One turn: send, then drain the stream. The stream ends on terminal
-  // states and on input_required alike, so this always returns; a parked
-  // approval is left in state for the card to answer as its own turn.
-  const runTurn = async (text: string, taskId?: string) => {
-    setBusy(true)
-    try {
-      const client = await clientRef.current!
-      const turn = sendTurn(client, text, { contextId: chat.context_id, taskId })
-      for await (const event of turn) {
-        if (!aliveRef.current) break
-        if (event.kind === 'artifact-text' && event.text) {
-          append({ who: 'agent', text: event.text })
-        } else if (event.kind === 'permission') {
-          setApproval({ taskId: event.taskId, permission: event.permission })
-        } else if (event.kind === 'status') {
-          append({
-            who: 'system',
-            text: event.text ? `${event.state} — ${event.text}` : event.state,
-          })
-        }
-      }
-    } catch (error) {
-      append({ who: 'system', text: `error: ${String(error)}` })
-    } finally {
-      if (aliveRef.current) setBusy(false)
-    }
-  }
-
-  const sendDraft = async () => {
-    const text = draft.trim()
-    if (!text) return
-    append({ who: 'you', text })
-    setDraft('')
-    await runTurn(text)
-  }
-
-  const answer = async (decision: 'allow' | 'deny') => {
-    if (!approval) return
-    const parked = approval
-    setApproval(null)
-    append({ who: 'you', text: decision })
-    await runTurn(decision, parked.taskId)
-  }
-
+  // One HttpAgent per chat, registered under the chat's own key: registry
+  // agents are singletons per key, so distinct chats must never share one
+  // (same-key-different-threadId clobbers the shared instance's thread).
+  const agents = useMemo(
+    () => ({
+      [chat.context_id]: new HttpAgent({
+        url: '/agui/run',
+        threadId: chat.context_id,
+      }),
+    }),
+    [chat.context_id],
+  )
+  // CopilotChat swallows RUN_ERROR (AG-UI's failure event) into a console
+  // log by default — no in-flow trace. onError is scoped to this chat's
+  // agentId, so it only fires for runs this pane actually started. No cheap
+  // hook clears it on the next run (see report), so the banner is sticky
+  // until the chat is remounted.
+  const [runError, setRunError] = useState('')
   return (
     <section>
       <h2>{chat.agent}</h2>
-      <ol className="log">
-        {log.map((item, i) => (
-          <li key={i} className={item.who}>
-            <b>{item.who}</b> {item.text}
-          </li>
-        ))}
-      </ol>
-      {approval && (
-        <ApprovalCard permission={approval.permission} onAnswer={answer} />
-      )}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          sendDraft()
-        }}
-      >
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          disabled={busy || approval !== null}
-          placeholder={`Message ${chat.agent}`}
-          size={60}
+      {runError && <p className="error">run failed: {runError}</p>}
+      <CopilotKitProvider agents__unsafe_dev_only={agents}>
+        <PermissionTool />
+        <CopilotChat
+          agentId={chat.context_id}
+          threadId={chat.context_id}
+          onError={(event) => {
+            // CopilotChatProps["onError"] is typed as a union with the plain
+            // DOM `onError` (HTMLAttributes<HTMLDivElement> carries one too,
+            // for <img>/<video> children) — narrow to CopilotKit's own shape
+            // before reading `.error`.
+            if ('error' in event) setRunError(String(event.error?.message ?? event.error))
+          }}
         />
-        <button disabled={busy || approval !== null}>Send</button>
-      </form>
+      </CopilotKitProvider>
     </section>
   )
 }

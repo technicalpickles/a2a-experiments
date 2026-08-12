@@ -48,10 +48,6 @@ class Chat:
     upstream_url: str
     created_at: str
 
-    @property
-    def a2a_url(self) -> str:
-        return f"/a2a/chats/{self.context_id}/"
-
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

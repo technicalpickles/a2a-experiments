@@ -4,7 +4,6 @@ export interface ChatRef {
   context_id: string
   mission_id: string
   agent: string
-  a2a_url: string
   created_at: string
 }
 
