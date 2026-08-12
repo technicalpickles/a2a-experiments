@@ -207,11 +207,18 @@ curl -sN http://127.0.0.1:9300/agui/run -H 'content-type: application/json' -d '
 Expected: four `data:` lines — RUN_STARTED, TEXT_MESSAGE_START/CONTENT/END, RUN_FINISHED,
 with `[spike-th] you said: hello spike` in the CONTENT delta.
 
-- [ ] **Step 4: Spike pane** — CopilotKit direct connection, exact idiom per the
-  frontend research notes (see frontend-swap task for the settled imports/props; this
-  step is where they get proven). Two `SpikePane` instances side by side with distinct
-  hard-coded threadIds, each its own provider bound to one `HttpAgent({url: "/agui/run",
-  threadId})`. Render both in `App.tsx` temporarily.
+- [ ] **Step 4: Spike pane** — CopilotKit direct connection, settled idiom (verified
+  against the shipped 1.67.1 dist, 2026-08-12): everything imports from
+  `@copilotkit/react-core/v2` — `CopilotKitProvider`, `CopilotChat`, and `HttpAgent`
+  (re-exported from `@ag-ui/client`; use the re-export so `instanceof` checks inside
+  CopilotKit see one class identity). CSS: `import '@copilotkit/react-core/v2/styles.css'`.
+  Registry agents are singletons per key, so one `HttpAgent` per pane under its own
+  key (`agents__unsafe_dev_only={{ [threadId]: agent }}`), `CopilotChat
+  agentId={threadId} threadId={threadId}` — never one shared key with different
+  threadIds (documented clobber). Two `SpikePane` instances side by side with distinct
+  hard-coded threadIds, each its own provider (provider-per-pane is architecturally
+  sound per source — each provider owns its core instance — but undocumented; the
+  spike is where we prove it). Render both in `App.tsx` temporarily.
 
 - [ ] **Step 5: Browser check (the spike's whole point)**
 
@@ -1248,32 +1255,38 @@ export function ApprovalCard({
 }
 ```
 
-- [ ] **Step 2: Rewrite `ChatPane.tsx`** (idiom as proven in the spike; adjust names
-  only if the spike found the documented ones moved)
+- [ ] **Step 2: Rewrite `ChatPane.tsx`** (idiom verified against the shipped 1.67.1
+  dist and proven in the spike; `renderAndWaitForResponse` is v1 — the v2 idiom is
+  `useHumanInTheLoop`, whose `respond(result)` resolves into a `role:"tool"` message
+  and auto-fires the follow-up run that carries it back to the endpoint)
 
 ```tsx
 import { useMemo } from 'react'
-import { HttpAgent } from '@ag-ui/client'
-import { CopilotKit, useCopilotAction } from '@copilotkit/react-core'
-import { CopilotChat } from '@copilotkit/react-ui'
-import '@copilotkit/react-ui/styles.css'
+import {
+  CopilotChat,
+  CopilotKitProvider,
+  HttpAgent,
+  useHumanInTheLoop,
+} from '@copilotkit/react-core/v2'
+import '@copilotkit/react-core/v2/styles.css'
 import type { ChatRef } from './api'
 import { ApprovalCard, type Permission } from './ApprovalCard'
 
 // request_permission is the one wire contract the cockpit mints (spec: Domain
 // model): args are a2acode's permission payload verbatim, the result is
-// {decision}. CopilotKit does the park-and-resume choreography.
-function PermissionAction() {
-  useCopilotAction({
+// {decision}. respond() resolves into a role:"tool" message and CopilotKit
+// fires the follow-up run; the service resumes the parked task from it.
+function PermissionTool() {
+  useHumanInTheLoop({
     name: 'request_permission',
-    available: 'remote',
-    renderAndWaitForResponse: ({ args, respond, status }) => {
-      if (status === 'complete') return <></>
-      const permission = args as unknown as Permission
+    description: 'Ask the user to allow or deny a tool use',
+    render: ({ args, status, respond }) => {
+      if (status === 'complete') return <p className="approval-done">answered</p>
+      if (status !== 'executing') return <></>
       return (
         <ApprovalCard
-          permission={permission}
-          onAnswer={(decision) => respond?.(JSON.stringify({ decision }))}
+          permission={args as unknown as Permission}
+          onAnswer={(decision) => respond?.({ decision })}
         />
       )
     },
@@ -1282,21 +1295,38 @@ function PermissionAction() {
 }
 
 export function ChatPane({ chat }: { chat: ChatRef }) {
-  const agent = useMemo(
-    () => new HttpAgent({ url: '/agui/run', threadId: chat.context_id }),
+  // One HttpAgent per chat, registered under the chat's own key: registry
+  // agents are singletons per key, so distinct chats must never share one
+  // (same-key-different-threadId clobbers the shared instance's thread).
+  const agents = useMemo(
+    () => ({
+      [chat.context_id]: new HttpAgent({
+        url: '/agui/run',
+        threadId: chat.context_id,
+      }),
+    }),
     [chat.context_id],
   )
   return (
     <section>
       <h2>{chat.agent}</h2>
-      <CopilotKit agent__unsafe_dev_only={agent} threadId={chat.context_id}>
-        <PermissionAction />
-        <CopilotChat labels={{ placeholder: `Message ${chat.agent}` }} />
-      </CopilotKit>
+      <CopilotKitProvider agents__unsafe_dev_only={agents}>
+        <PermissionTool />
+        <CopilotChat agentId={chat.context_id} threadId={chat.context_id} />
+      </CopilotKitProvider>
     </section>
   )
 }
 ```
+
+Also: `npm uninstall @copilotkit/react-ui` — v2's chat components ship inside
+react-core; react-ui is the v1 package and nothing imports it.
+
+Two rendering facts to carry into browser validation, not fight here:
+STEP_STARTED/STEP_FINISHED and CUSTOM events are consumed but not rendered by
+CopilotChat by default (narration is on the wire, invisible for now — DEVLOG it);
+unmatched tool calls render nothing unless a wildcard renderer is registered
+(`request_permission` has its own renderer, so this only matters if new tools appear).
 
 - [ ] **Step 3: Type-check and build**
 
