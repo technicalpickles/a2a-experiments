@@ -78,6 +78,10 @@ class RunTranslator:
             return self._text_delta(text) if text else []
         return [CustomEvent(name="a2a", value={"payload": which})]
 
+    def abort(self) -> list[BaseEvent]:
+        """Close any open text frame so a caller can end the run mid-stream."""
+        return self._close_text()
+
     def finish(self) -> list[BaseEvent]:
         events = self._close_text()
         if self._final_state == "failed":

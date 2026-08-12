@@ -31,16 +31,16 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
         yield encoder.encode(
             RunStartedEvent(thread_id=run_input.thread_id, run_id=run_input.run_id)
         )
-        chat = store.chat_for_context(run_input.thread_id)
-        if chat is None:
-            yield encoder.encode(
-                RunErrorEvent(
-                    message=f"no chat bound for thread {run_input.thread_id!r}"
-                )
-            )
-            return
         translator = RunTranslator(run_input.thread_id, run_input.run_id)
         try:
+            chat = store.chat_for_context(run_input.thread_id)
+            if chat is None:
+                yield encoder.encode(
+                    RunErrorEvent(
+                        message=f"no chat bound for thread {run_input.thread_id!r}"
+                    )
+                )
+                return
             turn = incoming_turn(run_input)
             async for event in conversations.run_turn(chat, turn):
                 for out in translator.feed(event):
@@ -48,6 +48,8 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
             for out in translator.finish():
                 yield encoder.encode(out)
         except Exception as exc:  # every failure must reach the stream as RUN_ERROR
+            for out in translator.abort():
+                yield encoder.encode(out)
             yield encoder.encode(RunErrorEvent(message=str(exc)))
             return
         if translator.parked and translator.task_id:

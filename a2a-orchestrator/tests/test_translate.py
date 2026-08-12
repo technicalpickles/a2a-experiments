@@ -131,6 +131,19 @@ def test_permission_parks_as_a_tool_call():
     assert translator.task_id == "t1"
 
 
+def test_abort_closes_an_open_text_frame():
+    translator = RunTranslator("th1", "r1")
+    translator.feed(task_event())
+    delta_events = translator.feed(artifact_event("Let me run the tests."))
+    start = next(e for e in delta_events if e.type.value == "TEXT_MESSAGE_START")
+
+    out = translator.abort()
+
+    assert [e.type.value for e in out] == ["TEXT_MESSAGE_END"]
+    assert out[0].message_id == start.message_id
+    assert translator.abort() == []
+
+
 def test_failed_turn_becomes_run_error():
     translator = RunTranslator("th1", "r1")
     out = drain(
