@@ -1783,13 +1783,13 @@ most visible argument for the event-log followup (`fc4eb2d8`).
 
 The deferral 2026-08-12 named twice — "history is advisory," and the message gap it
 called the sharpest one — got paid off today. Spec
-`docs/superpowers/specs/2026-08-13-agui-event-log-design.md`, twelve commits
-(`8f75ece..ac4b713`), merged to `main`. Every message crossing the AG-UI seam, both
+`docs/superpowers/specs/2026-08-13-agui-event-log-design.md`, one branch of commits
+(`8f75ece..973c090`), merged to `main`. Every message crossing the AG-UI seam, both
 directions, now lands in a SQLite `events` table as it happens; a remounted pane
 replays the whole prior conversation through the protocol's own connect handshake; a
 pending approval survives a service restart and comes back answerable; and the
 hardening batch scoped alongside it (`dbcb5569`) closed three trust gaps in the run
-loop. 51 tests this morning, 75 now. Frontend got build+lint only — there's still no JS
+loop. 51 tests this morning, 78 now. Frontend got build+lint only — there's still no JS
 test runner in this repo.
 
 The load-bearing discovery of the day was that the empty-pane-on-reload bug was never
@@ -1842,10 +1842,22 @@ unhandled promise rejection with nothing on screen — fixed by gating arming on
 actual snapshot and routing failures through the existing `runError` banner
 (`ac4b713`).
 
-Browser validation (Chrome, three scenarios) confirmed all of it live: reload replay
+The final whole-branch review caught a third, subtler than the first two: a resume
+answered through a re-armed card logged its tool result under the runTool-minted
+toolCallId, while the log's only `TOOL_CALL_START` carried the original request_id —
+so every later replay of that chat would fold an unanswered permission call plus an
+answer to a call that doesn't exist. The service already reconciled the *resume* by
+request_id; the *log* kept the unreconciled id. Fixed at write time: a resume that
+verifies against the pending state logs its answer under the call id it verified
+against, while a mismatched resume still logs verbatim, because the wrong answer is
+the truth of what happened (`973c090`).
+
+Browser validation (Chrome, four scenarios) confirmed all of it live: reload replay
 showed the full prior conversation; a pending card re-armed after reload and Allow
-completed the run; and restart survival held against the same database, pending
-approval intact. Console clean throughout. GIF: `~/Downloads/agui_event_log_replay.gif`.
+completed the run; restart survival held against the same database, pending
+approval intact; and reloading *after* answering a re-armed card rendered the
+exchange as cleanly answered — no orphan card, no error banner. Console clean
+throughout. GIF: `~/Downloads/agui_event_log_replay.gif`.
 
 Taskwarrior: `fc4eb2d8` (event log / persistence) and `dbcb5569` (hardening batch) both
 close with this entry. `13f576dc` (rich rendering of plan/diff artifacts) and
