@@ -81,7 +81,7 @@ def test_completed_turn_streams_text_and_finishes():
     ends = [e for e in out if e.type.value == "TEXT_MESSAGE_END"]
     assert starts[0].message_id == ends[0].message_id
     assert translator.task_id == "t1"
-    assert translator.parked is None
+    assert translator.pending is None
 
 
 def test_working_narration_becomes_step_pairs():
@@ -98,7 +98,7 @@ def test_working_narration_becomes_step_pairs():
     assert out[0].step_name == "Using tool: Read"
 
 
-def test_permission_parks_as_a_tool_call():
+def test_permission_pends_as_a_tool_call():
     permission = {"tool": "Bash", "request_id": "req-1", "input": {"command": "pytest"}}
     translator = RunTranslator("th1", "r1")
     out = drain(
@@ -127,7 +127,7 @@ def test_permission_parks_as_a_tool_call():
     assert start.tool_call_name == PERMISSION_TOOL
     assert start.tool_call_id == "req-1"
     assert json.loads(args.delta) == permission
-    assert translator.parked == permission
+    assert translator.pending == permission
     assert translator.task_id == "t1"
 
 

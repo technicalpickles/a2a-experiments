@@ -3,7 +3,7 @@
 Outbound: RunTranslator turns one A2A turn's stream events into AG-UI events.
 Inbound (added in the translate-inbound task): incoming_turn decides whether a
 RunAgentInput is a fresh user message or a permission decision resuming a
-parked task.
+pending task.
 
 Stateful across one run on purpose: artifact chunks stream as one assistant
 message (START once, a CONTENT delta per chunk, END at close), and terminal
@@ -61,7 +61,7 @@ class RunTranslator:
         self.thread_id = thread_id
         self.run_id = run_id
         self.task_id = ""
-        self.parked: dict[str, Any] | None = None
+        self.pending: dict[str, Any] | None = None
         self._message_id = ""
         self._final_state = ""
         self._final_text = ""
@@ -107,13 +107,13 @@ class RunTranslator:
             status.state == TaskState.TASK_STATE_INPUT_REQUIRED
             and PERMISSION_KEY in metadata
         ):
-            self.parked = metadata[PERMISSION_KEY]
+            self.pending = metadata[PERMISSION_KEY]
             self.task_id = update.task_id or self.task_id
             self._final_state = "input_required"
-            call_id = self.parked.get("request_id") or uuid.uuid4().hex
+            call_id = self.pending.get("request_id") or uuid.uuid4().hex
             return self._close_text() + [
                 ToolCallStartEvent(tool_call_id=call_id, tool_call_name=PERMISSION_TOOL),
-                ToolCallArgsEvent(tool_call_id=call_id, delta=json.dumps(self.parked)),
+                ToolCallArgsEvent(tool_call_id=call_id, delta=json.dumps(self.pending)),
                 ToolCallEndEvent(tool_call_id=call_id),
             ]
         if status.state == TaskState.TASK_STATE_WORKING:

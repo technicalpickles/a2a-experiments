@@ -48,14 +48,14 @@ async def test_upstream_adopts_the_minted_context(billing_chat, http):
     assert task.context_id == billing_chat.context_id
 
 
-async def test_resume_targets_the_parked_task(billing_chat, http):
+async def test_resume_targets_the_pending_task(billing_chat, http):
     conversations = Conversations(http)
-    parked = await drain(
+    pending = await drain(
         conversations.run_turn(billing_chat, Turn(kind="message", text="please run the tests"))
     )
-    task_id = next(e.task.id for e in parked if e.WhichOneof("payload") == "task")
-    conversations.park(billing_chat.context_id, task_id)
-    assert conversations.parked_task(billing_chat.context_id) == task_id
+    task_id = next(e.task.id for e in pending if e.WhichOneof("payload") == "task")
+    conversations.set_pending(billing_chat.context_id, task_id)
+    assert conversations.pending_task(billing_chat.context_id) == task_id
 
     resumed = await drain(
         conversations.run_turn(billing_chat, Turn(kind="resume", text="allow"))
@@ -66,11 +66,11 @@ async def test_resume_targets_the_parked_task(billing_chat, http):
         if e.WhichOneof("payload") == "status_update"
     }
     assert resumed_task_ids == {task_id}
-    conversations.clear(billing_chat.context_id)
-    assert conversations.parked_task(billing_chat.context_id) is None
+    conversations.clear_pending(billing_chat.context_id)
+    assert conversations.pending_task(billing_chat.context_id) is None
 
 
-async def test_resume_with_nothing_parked_refuses(billing_chat, http):
+async def test_resume_with_nothing_pending_refuses(billing_chat, http):
     conversations = Conversations(http)
     with pytest.raises(LookupError, match=billing_chat.context_id):
         await drain(conversations.run_turn(billing_chat, Turn(kind="resume", text="allow")))

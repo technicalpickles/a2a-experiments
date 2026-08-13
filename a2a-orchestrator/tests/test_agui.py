@@ -59,21 +59,21 @@ async def test_free_text_round_trips(mission, open_chat, http, service_url):
     assert "Ready when you are" in text_of(events)
 
 
-async def test_permission_parks_as_a_tool_call_and_allow_resumes(
+async def test_permission_pends_as_a_tool_call_and_allow_resumes(
     mission, open_chat, http, service_url
 ):
     chat = await open_chat(mission["id"], "billing-api")
-    parked = await run(
+    pending = await run(
         http, service_url, chat["context_id"], user_says("please run the tests")
     )
-    starts = [e for e in parked if e["type"] == "TOOL_CALL_START"]
+    starts = [e for e in pending if e["type"] == "TOOL_CALL_START"]
     assert [e["toolCallName"] for e in starts] == ["request_permission"]
     call_id = starts[0]["toolCallId"]
     args = json.loads(
-        "".join(e["delta"] for e in parked if e["type"] == "TOOL_CALL_ARGS")
+        "".join(e["delta"] for e in pending if e["type"] == "TOOL_CALL_ARGS")
     )
     assert args["tool"] == "Bash"
-    assert types_of(parked)[-1] == "RUN_FINISHED"
+    assert types_of(pending)[-1] == "RUN_FINISHED"
 
     resumed = await run(
         http,
@@ -94,10 +94,10 @@ async def test_permission_parks_as_a_tool_call_and_allow_resumes(
 
 async def test_deny_reads_as_the_skipped_ending(mission, open_chat, http, service_url):
     chat = await open_chat(mission["id"], "billing-api")
-    parked = await run(
+    pending = await run(
         http, service_url, chat["context_id"], user_says("please run the tests")
     )
-    call_id = next(e["toolCallId"] for e in parked if e["type"] == "TOOL_CALL_START")
+    call_id = next(e["toolCallId"] for e in pending if e["type"] == "TOOL_CALL_START")
     resumed = await run(
         http,
         service_url,
@@ -130,14 +130,14 @@ async def test_unbound_thread_is_a_run_error(http, service_url):
     assert "deadbeef" in events[-1]["message"]
 
 
-async def test_fresh_message_while_parked_leaves_the_card_answerable(
+async def test_fresh_message_while_pending_leaves_the_card_answerable(
     mission, open_chat, http, service_url
 ):
     chat = await open_chat(mission["id"], "billing-api")
-    parked = await run(
+    pending = await run(
         http, service_url, chat["context_id"], user_says("please run the tests")
     )
-    call_id = next(e["toolCallId"] for e in parked if e["type"] == "TOOL_CALL_START")
+    call_id = next(e["toolCallId"] for e in pending if e["type"] == "TOOL_CALL_START")
 
     fresh = await run(
         http, service_url, chat["context_id"], user_says("hello from the cockpit")
@@ -177,7 +177,7 @@ async def test_two_chats_route_to_their_own_repos(mission, open_chat, http, serv
     assert billing["context_id"] != checkout["context_id"]
 
 
-async def test_resume_with_nothing_parked_is_a_run_error(
+async def test_resume_with_nothing_pending_is_a_run_error(
     mission, open_chat, http, service_url
 ):
     chat = await open_chat(mission["id"], "billing-api")

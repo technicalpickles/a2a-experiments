@@ -3,10 +3,10 @@
 One run per turn. RUN_STARTED is emitted before upstream is contacted so
 every failure after it — unknown thread, refused turn, upstream fault —
 lands inside the run as RUN_ERROR rather than as a broken transport. The
-park/clear decision happens here, after the translator has seen the whole
-turn: parked permission -> remember the taskId; a consumed resume that
-didn't re-park -> forget it; a fresh message that didn't park -> leave any
-existing park alone, since it wasn't this turn's to drop.
+pending/clear decision happens here, after the translator has seen the whole
+turn: pending permission -> remember the taskId; a consumed resume that
+didn't re-pend -> forget it; a fresh message that didn't pend -> leave any
+existing pending alone, since it wasn't this turn's to drop.
 """
 
 from __future__ import annotations
@@ -61,12 +61,12 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
                 yield encoder.encode(out)
             yield encoder.encode(RunErrorEvent(message=str(exc)))
             return
-        # The park is replaced or consumed, never incidentally dropped — a
+        # The pending state is replaced or consumed, never incidentally dropped — a
         # fresh message while an approval is pending leaves the card
         # answerable.
-        if translator.parked and translator.task_id:
-            conversations.park(chat.context_id, translator.task_id)
+        if translator.pending and translator.task_id:
+            conversations.set_pending(chat.context_id, translator.task_id)
         elif turn.kind == "resume":
-            conversations.clear(chat.context_id)
+            conversations.clear_pending(chat.context_id)
 
     return StreamingResponse(stream(), media_type=encoder.get_content_type())
