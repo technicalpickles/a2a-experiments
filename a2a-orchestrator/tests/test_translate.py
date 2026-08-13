@@ -170,7 +170,34 @@ def test_canceled_turn_finishes_with_a_note():
 def test_unknown_payloads_pass_through_as_custom():
     translator = RunTranslator("th1", "r1")
     out = drain(translator, [StreamResponse()])
-    assert types_of(out) == ["CUSTOM", "RUN_FINISHED"]
+    assert types_of(out) == ["CUSTOM", "RUN_ERROR"]
+
+
+def test_stream_ending_without_terminal_state_is_a_run_error():
+    translator = RunTranslator("th1", "r1")
+    out = drain(translator, [task_event(), artifact_event("half an ans")])
+    assert types_of(out) == ["TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+                             "TEXT_MESSAGE_END", "RUN_ERROR"]
+    assert "terminal state" in out[-1].message
+    assert translator.truncated
+
+
+def test_terminal_states_are_not_truncation():
+    translator = RunTranslator("th1", "r1")
+    drain(translator, [task_event(), status_event(TaskState.TASK_STATE_COMPLETED)])
+    assert not translator.truncated
+
+
+def test_pending_permission_captures_the_call_id():
+    permission = {"tool": "Bash", "request_id": "req-1", "input": {}}
+    translator = RunTranslator("th1", "r1")
+    drain(
+        translator,
+        [task_event(), status_event(TaskState.TASK_STATE_INPUT_REQUIRED,
+                                    text="Bash",
+                                    metadata={"a2acode_permission": permission})],
+    )
+    assert translator.call_id == "req-1"
 
 
 def run_input(messages):

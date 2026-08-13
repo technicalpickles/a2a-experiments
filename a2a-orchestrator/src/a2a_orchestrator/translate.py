@@ -62,6 +62,8 @@ class RunTranslator:
         self.run_id = run_id
         self.task_id = ""
         self.pending: dict[str, Any] | None = None
+        self.call_id = ""
+        self.truncated = False
         self._message_id = ""
         self._final_state = ""
         self._final_text = ""
@@ -84,14 +86,20 @@ class RunTranslator:
 
     def finish(self) -> list[BaseEvent]:
         events = self._close_text()
+        if not self._final_state:
+            # The upstream stream ended without completing, failing, or asking
+            # for input — surface it, don't launder it (spec: Hardening #1).
+            self.truncated = True
+            events.append(
+                RunErrorEvent(message="upstream stream ended without a terminal state")
+            )
+            return events
         if self._final_state == "failed":
             events.append(RunErrorEvent(message=self._final_text or "task failed"))
             return events
         if self._final_state == "canceled":
             events.append(CustomEvent(name="canceled", value={"text": self._final_text}))
-        events.append(
-            RunFinishedEvent(thread_id=self.thread_id, run_id=self.run_id)
-        )
+        events.append(RunFinishedEvent(thread_id=self.thread_id, run_id=self.run_id))
         return events
 
     def _status(self, update) -> list[BaseEvent]:
@@ -110,11 +118,11 @@ class RunTranslator:
             self.pending = metadata[PERMISSION_KEY]
             self.task_id = update.task_id or self.task_id
             self._final_state = "input_required"
-            call_id = self.pending.get("request_id") or uuid.uuid4().hex
+            self.call_id = self.pending.get("request_id") or uuid.uuid4().hex
             return self._close_text() + [
-                ToolCallStartEvent(tool_call_id=call_id, tool_call_name=PERMISSION_TOOL),
-                ToolCallArgsEvent(tool_call_id=call_id, delta=json.dumps(self.pending)),
-                ToolCallEndEvent(tool_call_id=call_id),
+                ToolCallStartEvent(tool_call_id=self.call_id, tool_call_name=PERMISSION_TOOL),
+                ToolCallArgsEvent(tool_call_id=self.call_id, delta=json.dumps(self.pending)),
+                ToolCallEndEvent(tool_call_id=self.call_id),
             ]
         if status.state == TaskState.TASK_STATE_WORKING:
             if not text:
