@@ -1,7 +1,12 @@
-import { useMemo, useState } from 'react'
-import { CopilotChat, CopilotKitProvider, useHumanInTheLoop } from '@copilotkit/react-core/v2'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  CopilotChat,
+  CopilotKitProvider,
+  useCopilotKit,
+  useHumanInTheLoop,
+} from '@copilotkit/react-core/v2'
 import '@copilotkit/react-core/v2/styles.css'
-import type { ChatRef } from './api'
+import { fetchPending, type ChatRef } from './api'
 import { ApprovalCard, type Permission } from './ApprovalCard'
 import { ReplayHttpAgent } from './agent'
 
@@ -24,6 +29,43 @@ function PermissionTool() {
       )
     },
   })
+  return null
+}
+
+// Replay paints a pending approval's text, but HITL status only goes
+// live inside a run — a reloaded card renders inert (verified against
+// 1.67.1: status derives from live tool execution, respond() is a no-op
+// outside one). runTool() is the one supported re-arm: it fires the tool
+// fresh (new toolCallId; the service reconciles by request_id) and
+// followUp:'generate' carries the answer upstream as a normal resume.
+function PendingRearm({ contextId, agent }: { contextId: string; agent: ReplayHttpAgent }) {
+  const { copilotkit } = useCopilotKit()
+  const armed = useRef(false)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const pending = await fetchPending(contextId)
+      if (!pending || cancelled || armed.current) return
+      // Wait for the connect snapshot to land first: the snapshot merge
+      // drops messages it doesn't know, so arming before it applies would
+      // wipe the synthesized call. Pending implies history, so non-empty
+      // messages means the snapshot arrived.
+      for (let i = 0; i < 100 && agent.messages.length === 0 && !cancelled; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      if (cancelled || armed.current) return
+      armed.current = true
+      await copilotkit.runTool({
+        name: 'request_permission',
+        agentId: contextId,
+        parameters: pending,
+        followUp: 'generate',
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [contextId, agent, copilotkit])
   return null
 }
 
@@ -52,6 +94,7 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
       {runError && <p className="error">run failed: {runError}</p>}
       <CopilotKitProvider agents__unsafe_dev_only={agents}>
         <PermissionTool />
+        <PendingRearm contextId={chat.context_id} agent={agents[chat.context_id]} />
         <CopilotChat
           agentId={chat.context_id}
           threadId={chat.context_id}
