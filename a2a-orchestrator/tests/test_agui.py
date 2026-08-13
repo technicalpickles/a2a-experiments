@@ -299,6 +299,72 @@ async def test_connect_on_an_unknown_thread_is_a_run_error(http, service_url):
     assert types_of(events) == ["RUN_STARTED", "RUN_ERROR"]
 
 
+async def test_rearmed_resume_logs_the_answer_against_the_original_call_id(
+    mission, open_chat, http, service_url
+):
+    """Reloading before a decision re-arms the card via CopilotKit's runTool,
+    which mints a fresh toolCallId. The service verifies such a resume by
+    the permission payload's request_id (Conversations.run_turn), but the
+    event log must still pair the answer with the call it verified against
+    — otherwise replay folds an unanswered request_permission plus an
+    orphan tool result (final review, F1).
+    """
+    chat = await open_chat(mission["id"], "billing-api")
+    pending = await run(
+        http, service_url, chat["context_id"], user_says("please run the tests")
+    )
+    call_id = next(e["toolCallId"] for e in pending if e["type"] == "TOOL_CALL_START")
+    payload = json.loads(
+        "".join(e["delta"] for e in pending if e["type"] == "TOOL_CALL_ARGS")
+    )
+    assert payload["request_id"]
+
+    rearmed_call_id = "rearm-" + uuid.uuid4().hex
+    resumed = await run(
+        http,
+        service_url,
+        chat["context_id"],
+        [
+            {
+                "id": uuid.uuid4().hex,
+                "role": "assistant",
+                "toolCalls": [
+                    {
+                        "id": rearmed_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "request_permission",
+                            "arguments": json.dumps(payload),
+                        },
+                    }
+                ],
+            },
+            {
+                "id": uuid.uuid4().hex,
+                "role": "tool",
+                "toolCallId": rearmed_call_id,
+                "content": json.dumps({"decision": "allow"}),
+            },
+        ],
+    )
+    assert types_of(resumed)[-1] == "RUN_FINISHED"
+    assert not [e for e in resumed if e["type"] == "RUN_ERROR"]
+
+    events = await connect(http, service_url, chat["context_id"])
+    messages = events[1]["messages"]
+    tool_call_ids = {c["id"] for m in messages for c in (m.get("toolCalls") or [])}
+    tool_message_ids = {m["toolCallId"] for m in messages if m["role"] == "tool"}
+    assert tool_message_ids <= tool_call_ids
+    assert tool_message_ids == {call_id}
+    permission_calls = {
+        c["id"]
+        for m in messages
+        for c in (m.get("toolCalls") or [])
+        if c["function"]["name"] == "request_permission"
+    }
+    assert permission_calls <= tool_message_ids  # no unanswered request_permission
+
+
 async def test_connect_on_a_fresh_chat_is_an_empty_snapshot(
     mission, open_chat, http, service_url
 ):

@@ -13,7 +13,7 @@ import { ReplayHttpAgent } from './agent'
 // request_permission is the one wire contract the cockpit mints (spec: Domain
 // model): args are a2acode's permission payload verbatim, the result is
 // {decision}. respond() resolves into a role:"tool" message and CopilotKit
-// fires the follow-up run; the service resumes the parked task from it.
+// fires the follow-up run; the service resumes the pending task from it.
 function PermissionTool() {
   useHumanInTheLoop({
     name: 'request_permission',

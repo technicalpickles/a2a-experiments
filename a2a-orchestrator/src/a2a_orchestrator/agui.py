@@ -96,15 +96,32 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
                     )
                 )
                 return
-            if run_input.messages:
+            tail = run_input.messages[-1] if run_input.messages else None
+            try:
+                turn = incoming_turn(run_input)
+            except ValueError:
+                if tail is not None:
+                    store.append_event(
+                        chat.context_id,
+                        "in",
+                        tail.model_dump_json(by_alias=True, exclude_none=True),
+                    )
+                raise
+            if tail is not None:
+                if turn.kind == "resume":
+                    pending = conversations.pending_of(chat.context_id)
+                    claimed = turn.request_id or turn.tool_call_id
+                    if pending is not None and claimed == pending.call_id:
+                        # A re-armed card answers with a freshly minted
+                        # toolCallId; the log must pair the answer with the
+                        # call it verified against, or replay folds an
+                        # orphan (final review, F1).
+                        tail = tail.model_copy(update={"tool_call_id": pending.call_id})
                 store.append_event(
                     chat.context_id,
                     "in",
-                    run_input.messages[-1].model_dump_json(
-                        by_alias=True, exclude_none=True
-                    ),
+                    tail.model_dump_json(by_alias=True, exclude_none=True),
                 )
-            turn = incoming_turn(run_input)
             async for event in conversations.run_turn(chat, turn):
                 for out in translator.feed(event):
                     yield emit(out)
@@ -155,7 +172,18 @@ async def connect_agent(request: Request) -> StreamingResponse | JSONResponse:
         yield encoder.encode(
             RunStartedEvent(thread_id=run_input.thread_id, run_id=run_input.run_id)
         )
-        chat = store.chat_for_context(run_input.thread_id)
+        try:
+            chat = store.chat_for_context(run_input.thread_id)
+        except Exception:
+            logger.exception(
+                "chat lookup failed for thread %s", run_input.thread_id
+            )
+            yield encoder.encode(
+                RunErrorEvent(
+                    message=f"chat lookup failed for thread {run_input.thread_id!r}"
+                )
+            )
+            return
         if chat is None:
             yield encoder.encode(
                 RunErrorEvent(
