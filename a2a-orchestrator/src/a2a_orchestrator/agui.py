@@ -35,12 +35,25 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
     encoder = EventEncoder()
 
     async def stream():
-        yield encoder.encode(
+        chat = store.chat_for_context(run_input.thread_id)
+
+        def emit(event) -> str:
+            # A write failure is a real failure: it raises, and the except
+            # arm below turns it into RUN_ERROR — a log with holes is worse
+            # than a loud stop.
+            if chat is not None:
+                store.append_event(
+                    chat.context_id,
+                    "out",
+                    event.model_dump_json(by_alias=True, exclude_none=True),
+                )
+            return encoder.encode(event)
+
+        yield emit(
             RunStartedEvent(thread_id=run_input.thread_id, run_id=run_input.run_id)
         )
         translator = RunTranslator(run_input.thread_id, run_input.run_id)
         try:
-            chat = store.chat_for_context(run_input.thread_id)
             if chat is None:
                 yield encoder.encode(
                     RunErrorEvent(
@@ -48,22 +61,34 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
                     )
                 )
                 return
+            if run_input.messages:
+                store.append_event(
+                    chat.context_id,
+                    "in",
+                    run_input.messages[-1].model_dump_json(
+                        by_alias=True, exclude_none=True
+                    ),
+                )
             turn = incoming_turn(run_input)
             async for event in conversations.run_turn(chat, turn):
                 for out in translator.feed(event):
-                    yield encoder.encode(out)
+                    yield emit(out)
             for out in translator.finish():
-                yield encoder.encode(out)
+                yield emit(out)
         except Exception as exc:  # every failure must reach the stream as RUN_ERROR
             logger.exception(
                 "run %s on thread %s failed", run_input.run_id, run_input.thread_id
             )
             for out in translator.abort():
-                yield encoder.encode(out)
-            yield encoder.encode(RunErrorEvent(message=str(exc)))
+                yield emit(out)
+            yield emit(RunErrorEvent(message=str(exc)))
             return
-        # The pending state is replaced or consumed, never incidentally dropped — a
-        # fresh message while an approval is pending leaves the card
+        if translator.truncated:
+            # The upstream never reached a terminal state; whatever was
+            # pending before this turn is not this turn's to decide.
+            return
+        # The pending state is replaced or consumed, never incidentally
+        # dropped — a fresh message while an approval waits leaves the card
         # answerable.
         if translator.pending and translator.task_id:
             conversations.set_pending(

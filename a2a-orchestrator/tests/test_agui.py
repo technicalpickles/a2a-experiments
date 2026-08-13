@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 
 
@@ -195,3 +196,63 @@ async def test_resume_with_nothing_pending_is_a_run_error(
         ],
     )
     assert types_of(events)[-1] == "RUN_ERROR"
+
+
+async def test_seam_traffic_lands_in_the_event_log(
+    mission, open_chat, http, service_url, service_db
+):
+    chat = await open_chat(mission["id"], "billing-api")
+    await run(
+        http, service_url, chat["context_id"], user_says("hello from the cockpit")
+    )
+    rows = sqlite3.connect(service_db).execute(
+        "SELECT direction, payload FROM events WHERE context_id = ? ORDER BY seq",
+        (chat["context_id"],),
+    ).fetchall()
+    incoming = [json.loads(p) for d, p in rows if d == "in"]
+    assert [m["content"] for m in incoming] == ["hello from the cockpit"]
+    out_types = [json.loads(p)["type"] for d, p in rows if d == "out"]
+    assert out_types[0] == "RUN_STARTED"
+    assert out_types[-1] == "RUN_FINISHED"
+    assert "TEXT_MESSAGE_CONTENT" in out_types
+
+
+async def test_mismatched_resume_refuses_and_keeps_pending(
+    mission, open_chat, http, service_url
+):
+    chat = await open_chat(mission["id"], "billing-api")
+    pending = await run(
+        http, service_url, chat["context_id"], user_says("please run the tests")
+    )
+    call_id = next(e["toolCallId"] for e in pending if e["type"] == "TOOL_CALL_START")
+
+    wrong = await run(
+        http,
+        service_url,
+        chat["context_id"],
+        [
+            {
+                "id": uuid.uuid4().hex,
+                "role": "tool",
+                "toolCallId": "not-" + call_id,
+                "content": json.dumps({"decision": "allow"}),
+            }
+        ],
+    )
+    assert types_of(wrong)[-1] == "RUN_ERROR"
+
+    resumed = await run(
+        http,
+        service_url,
+        chat["context_id"],
+        [
+            {
+                "id": uuid.uuid4().hex,
+                "role": "tool",
+                "toolCallId": call_id,
+                "content": json.dumps({"decision": "allow"}),
+            }
+        ],
+    )
+    assert types_of(resumed)[-1] == "RUN_FINISHED"
+    assert not [e for e in resumed if e["type"] == "RUN_ERROR"]
