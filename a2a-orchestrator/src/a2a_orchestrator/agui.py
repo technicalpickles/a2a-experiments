@@ -11,6 +11,7 @@ existing pending alone, since it wasn't this turn's to drop.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from ag_ui.core import RunAgentInput, RunErrorEvent, RunStartedEvent
@@ -65,7 +66,12 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
         # fresh message while an approval is pending leaves the card
         # answerable.
         if translator.pending and translator.task_id:
-            conversations.set_pending(chat.context_id, translator.task_id)
+            conversations.set_pending(
+                chat.context_id,
+                translator.task_id,
+                translator.call_id,
+                json.dumps(translator.pending),
+            )
         elif turn.kind == "resume":
             conversations.clear_pending(chat.context_id)
 

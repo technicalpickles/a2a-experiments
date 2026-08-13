@@ -30,7 +30,7 @@ def build_app(
         timeout = httpx.Timeout(120.0, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as http:
             app.state.http = http
-            app.state.conversations = Conversations(http)
+            app.state.conversations = Conversations(http, app.state.store)
             yield
 
     routes = [
