@@ -241,7 +241,7 @@ def test_trailing_tool_result_is_a_resume():
             ]
         )
     )
-    assert turn == Turn(kind="resume", text="allow")
+    assert turn == Turn(kind="resume", text="allow", tool_call_id="req-1")
 
 
 def test_bare_string_decision_also_works():
@@ -250,7 +250,7 @@ def test_bare_string_decision_also_works():
             [{"id": "m1", "role": "tool", "toolCallId": "req-1", "content": "deny"}]
         )
     )
-    assert turn == Turn(kind="resume", text="deny")
+    assert turn == Turn(kind="resume", text="deny", tool_call_id="req-1")
 
 
 def test_unknown_decision_refuses_loudly():
@@ -274,3 +274,45 @@ def test_multimodal_user_message_refuses_loudly():
                 [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "hi"}]}]
             )
         )
+
+
+def test_resume_reads_request_id_from_the_answered_call():
+    turn = incoming_turn(
+        run_input(
+            [
+                {"id": "m1", "role": "user", "content": "please run the tests"},
+                {
+                    "id": "m2",
+                    "role": "assistant",
+                    "toolCalls": [
+                        {
+                            "id": "call-9",
+                            "type": "function",
+                            "function": {
+                                "name": "request_permission",
+                                "arguments": '{"request_id": "req-7", "tool": "Bash"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": "m3",
+                    "role": "tool",
+                    "toolCallId": "call-9",
+                    "content": '{"decision": "allow"}',
+                },
+            ]
+        )
+    )
+    assert turn == Turn(
+        kind="resume", text="allow", tool_call_id="call-9", request_id="req-7"
+    )
+
+
+def test_resume_without_history_still_carries_the_tool_call_id():
+    turn = incoming_turn(
+        run_input(
+            [{"id": "m1", "role": "tool", "toolCallId": "req-1", "content": "deny"}]
+        )
+    )
+    assert turn == Turn(kind="resume", text="deny", tool_call_id="req-1")

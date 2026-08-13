@@ -160,6 +160,8 @@ class Turn:
 
     kind: Literal["message", "resume"]
     text: str
+    tool_call_id: str = ""
+    request_id: str = ""
 
 
 def incoming_turn(run_input: RunAgentInput) -> Turn:
@@ -167,7 +169,12 @@ def incoming_turn(run_input: RunAgentInput) -> Turn:
         raise ValueError("run carried no messages")
     last = run_input.messages[-1]
     if isinstance(last, ToolMessage):
-        return Turn(kind="resume", text=_decision(last.content))
+        return Turn(
+            kind="resume",
+            text=_decision(last.content),
+            tool_call_id=last.tool_call_id,
+            request_id=_request_id(run_input.messages, last.tool_call_id),
+        )
     if isinstance(last, UserMessage) and isinstance(last.content, str) and last.content:
         return Turn(kind="message", text=last.content)
     raise ValueError(f"cannot act on a trailing {type(last).__name__}")
@@ -184,3 +191,16 @@ def _decision(content: str | None) -> str:
     if parsed not in ("allow", "deny"):
         raise ValueError(f"tool result carried no decision: {content!r}")
     return parsed
+
+
+def _request_id(messages, tool_call_id: str) -> str:
+    """The request_id inside the answered call's args, or '' if unfindable."""
+    for message in reversed(messages):
+        for call in getattr(message, "tool_calls", None) or []:
+            if call.id == tool_call_id and call.function.name == PERMISSION_TOOL:
+                try:
+                    args = json.loads(call.function.arguments)
+                except json.JSONDecodeError:
+                    return ""
+                return str(args.get("request_id") or "")
+    return ""
