@@ -51,3 +51,12 @@ export async function listRepos(): Promise<RepoEntry[]> {
 export async function openChat(missionId: string, agent: string): Promise<ChatRef> {
   return json<ChatRef>(await post(`/api/missions/${missionId}/chats`, { agent }))
 }
+
+export async function fetchPending(
+  contextId: string,
+): Promise<Record<string, unknown> | null> {
+  const data = await json<{ pending: Record<string, unknown> | null }>(
+    await fetch(`/api/chats/${contextId}/pending`),
+  )
+  return data.pending
+}
