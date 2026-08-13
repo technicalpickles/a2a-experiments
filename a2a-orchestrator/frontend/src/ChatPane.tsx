@@ -1,13 +1,9 @@
 import { useMemo, useState } from 'react'
-import {
-  CopilotChat,
-  CopilotKitProvider,
-  HttpAgent,
-  useHumanInTheLoop,
-} from '@copilotkit/react-core/v2'
+import { CopilotChat, CopilotKitProvider, useHumanInTheLoop } from '@copilotkit/react-core/v2'
 import '@copilotkit/react-core/v2/styles.css'
 import type { ChatRef } from './api'
 import { ApprovalCard, type Permission } from './ApprovalCard'
+import { ReplayHttpAgent } from './agent'
 
 // request_permission is the one wire contract the cockpit mints (spec: Domain
 // model): args are a2acode's permission payload verbatim, the result is
@@ -37,7 +33,7 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
   // (same-key-different-threadId clobbers the shared instance's thread).
   const agents = useMemo(
     () => ({
-      [chat.context_id]: new HttpAgent({
+      [chat.context_id]: new ReplayHttpAgent({
         url: '/agui/run',
         threadId: chat.context_id,
       }),
