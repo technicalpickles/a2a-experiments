@@ -35,25 +35,54 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
     encoder = EventEncoder()
 
     async def stream():
-        chat = store.chat_for_context(run_input.thread_id)
-
-        def emit(event) -> str:
-            # A write failure is a real failure: it raises, and the except
-            # arm below turns it into RUN_ERROR — a log with holes is worse
-            # than a loud stop.
-            if chat is not None:
-                store.append_event(
-                    chat.context_id,
-                    "out",
-                    event.model_dump_json(by_alias=True, exclude_none=True),
+        try:
+            chat = store.chat_for_context(run_input.thread_id)
+        except Exception:
+            # No chat resolved means there's no context_id to log against —
+            # these two go out unlogged, same as the no-chat-bound RUN_ERROR
+            # below.
+            logger.exception(
+                "chat lookup failed for thread %s", run_input.thread_id
+            )
+            yield encoder.encode(
+                RunStartedEvent(thread_id=run_input.thread_id, run_id=run_input.run_id)
+            )
+            yield encoder.encode(
+                RunErrorEvent(
+                    message=f"chat lookup failed for thread {run_input.thread_id!r}"
                 )
+            )
+            return
+
+        def emit(event, *, best_effort: bool = False) -> str:
+            # A write failure is a real failure: on the happy path it raises,
+            # and the except arm below turns it into RUN_ERROR — a log with
+            # holes is worse than a loud stop. Once we're already in that
+            # except arm, though, delivering RUN_ERROR to the client
+            # outranks logging it — best_effort emits try the write and fall
+            # back to a bare encode rather than lose the event that tells
+            # the client the run is over.
+            if chat is not None:
+                try:
+                    store.append_event(
+                        chat.context_id,
+                        "out",
+                        event.model_dump_json(by_alias=True, exclude_none=True),
+                    )
+                except Exception:
+                    if not best_effort:
+                        raise
+                    logger.exception(
+                        "failed to log outbound event for context %s",
+                        chat.context_id,
+                    )
             return encoder.encode(event)
 
-        yield emit(
-            RunStartedEvent(thread_id=run_input.thread_id, run_id=run_input.run_id)
-        )
         translator = RunTranslator(run_input.thread_id, run_input.run_id)
         try:
+            yield emit(
+                RunStartedEvent(thread_id=run_input.thread_id, run_id=run_input.run_id)
+            )
             if chat is None:
                 yield encoder.encode(
                     RunErrorEvent(
@@ -80,8 +109,8 @@ async def run_agent(request: Request) -> StreamingResponse | JSONResponse:
                 "run %s on thread %s failed", run_input.run_id, run_input.thread_id
             )
             for out in translator.abort():
-                yield emit(out)
-            yield emit(RunErrorEvent(message=str(exc)))
+                yield emit(out, best_effort=True)
+            yield emit(RunErrorEvent(message=str(exc)), best_effort=True)
             return
         if translator.truncated:
             # The upstream never reached a terminal state; whatever was
