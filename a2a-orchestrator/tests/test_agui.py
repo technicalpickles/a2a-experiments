@@ -256,3 +256,53 @@ async def test_mismatched_resume_refuses_and_keeps_pending(
     )
     assert types_of(resumed)[-1] == "RUN_FINISHED"
     assert not [e for e in resumed if e["type"] == "RUN_ERROR"]
+
+
+async def connect(http, service_url, thread_id):
+    payload = {
+        "threadId": thread_id,
+        "runId": uuid.uuid4().hex,
+        "state": None,
+        "messages": [],
+        "tools": [],
+        "context": [],
+        "forwardedProps": None,
+    }
+    response = await http.post(f"{service_url}agui/connect", json=payload)
+    assert response.status_code == 200, response.text
+    return events_of(response.text)
+
+
+async def test_connect_replays_the_conversation(mission, open_chat, http, service_url):
+    chat = await open_chat(mission["id"], "billing-api")
+    await run(
+        http, service_url, chat["context_id"], user_says("hello from the cockpit")
+    )
+    await run(http, service_url, chat["context_id"], user_says("please run the tests"))
+
+    events = await connect(http, service_url, chat["context_id"])
+    assert types_of(events) == ["RUN_STARTED", "MESSAGES_SNAPSHOT", "RUN_FINISHED"]
+    messages = events[1]["messages"]
+    users = [m["content"] for m in messages if m["role"] == "user"]
+    assert users == ["hello from the cockpit", "please run the tests"]
+    assert any(
+        "Ready when you are" in (m.get("content") or "")
+        for m in messages
+        if m["role"] == "assistant"
+    )
+    calls = [c for m in messages for c in (m.get("toolCalls") or [])]
+    assert [c["function"]["name"] for c in calls] == ["request_permission"]
+
+
+async def test_connect_on_an_unknown_thread_is_a_run_error(http, service_url):
+    events = await connect(http, service_url, "deadbeef")
+    assert types_of(events) == ["RUN_STARTED", "RUN_ERROR"]
+
+
+async def test_connect_on_a_fresh_chat_is_an_empty_snapshot(
+    mission, open_chat, http, service_url
+):
+    chat = await open_chat(mission["id"], "billing-api")
+    events = await connect(http, service_url, chat["context_id"])
+    assert types_of(events) == ["RUN_STARTED", "MESSAGES_SNAPSHOT", "RUN_FINISHED"]
+    assert events[1]["messages"] == []
