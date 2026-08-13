@@ -108,3 +108,33 @@ def open_chat(service_url, http):
         return response.json()
 
     return _open
+
+
+class RestartableService:
+    """A service that can be restarted, using a fresh port each boot but the same db."""
+
+    def __init__(self, workdir: Path, rig_url: str):
+        self.workdir = workdir
+        self.rig_url = rig_url
+        self.proc, self.url = spawn_service(workdir, rig_url, free_port())
+
+    def restart(self) -> None:
+        """Stop and restart the service on a fresh port."""
+        self.stop()
+        self.proc, self.url = spawn_service(self.workdir, self.rig_url, free_port())
+
+    def stop(self) -> None:
+        """Terminate the service process."""
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+@pytest.fixture
+def restartable_service(rig_url, tmp_path) -> RestartableService:
+    """A service that can be restarted for testing restart survival."""
+    service = RestartableService(tmp_path, rig_url)
+    yield service
+    service.stop()
