@@ -21,8 +21,11 @@ from typing import Any, Literal
 
 from a2a.types import StreamResponse, TaskState
 from ag_ui.core import (
+    AssistantMessage,
     BaseEvent,
     CustomEvent,
+    FunctionCall,
+    Message,
     RunAgentInput,
     RunErrorEvent,
     RunFinishedEvent,
@@ -31,6 +34,7 @@ from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    ToolCall,
     ToolCallArgsEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
@@ -38,6 +42,7 @@ from ag_ui.core import (
     UserMessage,
 )
 from google.protobuf.json_format import MessageToDict
+from pydantic import TypeAdapter
 
 PERMISSION_KEY = "a2acode_permission"
 PERMISSION_TOOL = "request_permission"
@@ -204,3 +209,64 @@ def _request_id(messages, tool_call_id: str) -> str:
                     return ""
                 return str(args.get("request_id") or "")
     return ""
+
+
+_MESSAGE_ADAPTER: TypeAdapter[Message] = TypeAdapter(Message)
+
+
+def fold_messages(rows: list[tuple[int, str, str]]) -> list[Message]:
+    """The reading of the event log: replayable AG-UI messages, stable ids.
+
+    'in' rows pass through as the messages they already are; 'out' rows
+    re-assemble what streamed (deltas concatenate, tool calls pair with
+    their args, a RUN_ERROR becomes a visible assistant marker). Lifecycle
+    events shape the fold but produce no messages.
+    """
+    messages: list[Message] = []
+    open_text: dict[str, AssistantMessage] = {}
+    open_calls: dict[str, ToolCall] = {}
+    for seq, direction, payload in rows:
+        if direction == "in":
+            messages.append(_MESSAGE_ADAPTER.validate_json(payload))
+            continue
+        event = json.loads(payload)
+        kind = event.get("type")
+        if kind == "TEXT_MESSAGE_START":
+            text = AssistantMessage(
+                id=event["messageId"], role="assistant", content=""
+            )
+            open_text[event["messageId"]] = text
+            messages.append(text)
+        elif kind == "TEXT_MESSAGE_CONTENT":
+            text = open_text.get(event["messageId"])
+            if text is not None:
+                text.content = (text.content or "") + event["delta"]
+        elif kind == "TEXT_MESSAGE_END":
+            open_text.pop(event["messageId"], None)
+        elif kind == "TOOL_CALL_START":
+            call = ToolCall(
+                id=event["toolCallId"],
+                type="function",
+                function=FunctionCall(name=event["toolCallName"], arguments=""),
+            )
+            open_calls[event["toolCallId"]] = call
+            messages.append(
+                AssistantMessage(
+                    id=f"call-{event['toolCallId']}",
+                    role="assistant",
+                    tool_calls=[call],
+                )
+            )
+        elif kind == "TOOL_CALL_ARGS":
+            call = open_calls.get(event["toolCallId"])
+            if call is not None:
+                call.function.arguments += event["delta"]
+        elif kind == "RUN_ERROR":
+            messages.append(
+                AssistantMessage(
+                    id=f"error-{seq}",
+                    role="assistant",
+                    content=f"run failed: {event.get('message', '')}",
+                )
+            )
+    return messages

@@ -16,9 +16,20 @@ from a2a.types import (
     TaskStatus,
     TaskStatusUpdateEvent,
 )
-from ag_ui.core import RunAgentInput
+from ag_ui.core import (
+    RunAgentInput,
+    RunErrorEvent,
+    RunFinishedEvent,
+    RunStartedEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallStartEvent,
+)
 
-from a2a_orchestrator.translate import PERMISSION_TOOL, RunTranslator, Turn, incoming_turn
+from a2a_orchestrator.translate import PERMISSION_TOOL, RunTranslator, Turn, fold_messages, incoming_turn
 
 
 def task_event(task_id="t1", context_id="c1"):
@@ -316,3 +327,63 @@ def test_resume_without_history_still_carries_the_tool_call_id():
         )
     )
     assert turn == Turn(kind="resume", text="deny", tool_call_id="req-1")
+
+
+def out_row(seq, event):
+    return (seq, "out", event.model_dump_json(by_alias=True, exclude_none=True))
+
+
+def in_row(seq, message: dict):
+    return (seq, "in", json.dumps(message))
+
+
+def test_fold_concatenates_text_deltas():
+    rows = [
+        out_row(1, RunStartedEvent(thread_id="th1", run_id="r1")),
+        in_row(2, {"id": "u1", "role": "user", "content": "hello"}),
+        out_row(3, TextMessageStartEvent(message_id="m1")),
+        out_row(4, TextMessageContentEvent(message_id="m1", delta="Ready ")),
+        out_row(5, TextMessageContentEvent(message_id="m1", delta="when you are")),
+        out_row(6, TextMessageEndEvent(message_id="m1")),
+        out_row(7, RunFinishedEvent(thread_id="th1", run_id="r1")),
+    ]
+    messages = fold_messages(rows)
+    assert [(m.role, m.id) for m in messages] == [("user", "u1"), ("assistant", "m1")]
+    assert messages[0].content == "hello"
+    assert messages[1].content == "Ready when you are"
+
+
+def test_fold_pairs_tool_calls_with_their_results():
+    permission = {"tool": "Bash", "request_id": "req-1", "input": {}}
+    rows = [
+        in_row(1, {"id": "u1", "role": "user", "content": "please run the tests"}),
+        out_row(2, ToolCallStartEvent(tool_call_id="req-1",
+                                      tool_call_name="request_permission")),
+        out_row(3, ToolCallArgsEvent(tool_call_id="req-1",
+                                     delta=json.dumps(permission))),
+        out_row(4, ToolCallEndEvent(tool_call_id="req-1")),
+        in_row(5, {"id": "t1", "role": "tool", "toolCallId": "req-1",
+                   "content": '{"decision": "allow"}'}),
+    ]
+    messages = fold_messages(rows)
+    assert [m.role for m in messages] == ["user", "assistant", "tool"]
+    call = messages[1].tool_calls[0]
+    assert messages[1].id == "call-req-1"
+    assert call.id == "req-1"
+    assert call.function.name == "request_permission"
+    assert json.loads(call.function.arguments) == permission
+
+
+def test_fold_marks_failed_runs():
+    rows = [
+        in_row(1, {"id": "u1", "role": "user", "content": "status check please"}),
+        out_row(2, RunErrorEvent(message="terraform provider exploded")),
+    ]
+    messages = fold_messages(rows)
+    assert messages[-1].id == "error-2"
+    assert messages[-1].role == "assistant"
+    assert "terraform provider exploded" in messages[-1].content
+
+
+def test_fold_of_nothing_is_empty():
+    assert fold_messages([]) == []
