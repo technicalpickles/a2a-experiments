@@ -1778,3 +1778,76 @@ The multi-live topology needed nothing new — the static provider's one-entry-p
 shape just pluralized, which is what DESIGN-v3's one-process-many-repos ↔
 one-process-per-repo interchangeability promised. The empty-on-remount pane is now the
 most visible argument for the event-log followup (`fc4eb2d8`).
+
+## 2026-08-13 — the event log ships: replay, pending survival, hardening
+
+The deferral 2026-08-12 named twice — "history is advisory," and the message gap it
+called the sharpest one — got paid off today. Spec
+`docs/superpowers/specs/2026-08-13-agui-event-log-design.md`, twelve commits
+(`8f75ece..ac4b713`), merged to `main`. Every message crossing the AG-UI seam, both
+directions, now lands in a SQLite `events` table as it happens; a remounted pane
+replays the whole prior conversation through the protocol's own connect handshake; a
+pending approval survives a service restart and comes back answerable; and the
+hardening batch scoped alongside it (`dbcb5569`) closed three trust gaps in the run
+loop. 51 tests this morning, 75 now. Frontend got build+lint only — there's still no JS
+test runner in this repo.
+
+The load-bearing discovery of the day was that the empty-pane-on-reload bug was never
+a missing-machinery problem. CopilotKit's `CopilotChat` calls `connectAgent()` on
+every mount, expecting `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` back — and the
+plain `HttpAgent` we'd been running has no `connect()` at all. The library doesn't
+error on the miss, it swallows it silently, so the pane just renders nothing and looks
+like a rendering gap. Verified by reading `@ag-ui/client` 0.0.57 and
+`@copilotkit/react-core` 1.67.1 shipped source via sourcemaps, not docs. The fix
+(`12a0855`) is a real endpoint, `/agui/connect`, that folds the stored event log back
+into AG-UI messages (`d2337ed`) and answers with exactly the snapshot sequence the
+client was already asking for. Once that was understood, "add persistence" and "fix
+the empty pane" turned out to be the same task, which is why the spec could promise
+both in one sentence.
+
+A second trap surfaced next to it and got written down so nobody rediscovers it the
+hard way: `AgentConfig.initialMessages` exists and looks like the obvious seed point
+for replayed history, but `CopilotChat`'s mount effect wipes agent messages in both of
+its `threadId` branches — seeded history paints once, on the first render, then
+vanishes on the very next effect pass. The connect-handshake path sidesteps it
+entirely by answering the library's own expected request instead of fighting its
+mount lifecycle.
+
+Re-arming a pending approval after reload rides the same handshake: the HITL card's
+status derives from live run state only, and the one supported way to re-arm it is
+`copilotkit.runTool()` with a fresh `toolCallId` (`744c4d4`). Because the tool-call id
+changes on every re-arm, resume verification can't key on it — it keys on the
+permission payload's `request_id` instead, which is stable across the restart that
+orphaned the original `toolCallId`. `39f7b9f` exposes a chat's pending approval over
+REST so the browser has something to re-arm against after remount, and `6019016` pins
+the whole path — restart, replay, re-arm, resolve — end to end against the same
+database in `tests/test_restart.py`, which passed on the first run.
+
+Housekeeping that touched every layer: "park" is now "pending" everywhere —
+`pending_task_id`, `pending_call_id`, `pending_payload` on `chats` — cleaning up the
+naming the 2026-08-12 spec left in place as a same-deferral-class shortcut (`8f75ece`).
+The hardening batch landed alongside the persistence work rather than after it, per
+the spec's framing: a truncated upstream stream now closes as `RUN_ERROR` instead of
+silently reading as success (`c1c941d`), resumes are verified against `request_id`
+before being applied (`3cf8552`, `3843d97`), and clearing a pending approval evicts the
+cached A2A client instead of leaving it stale (`3843d97`).
+
+Review caught two plan-authored bugs before merge, both structural-invariant misses of
+the same shape 2026-08-12 already flagged once (every failure should land inside the
+run as `RUN_ERROR`). First: `run_agent`'s chat lookup had moved outside the `try`, so a
+db fault on that lookup would break the transport with no `RUN_ERROR` at all — fixed by
+wrapping the lookup and making the except-arm's emits best-effort (`5860b04`). Second:
+`PendingRearm`'s poll timeout armed the card anyway, and a failed poll vanished as an
+unhandled promise rejection with nothing on screen — fixed by gating arming on an
+actual snapshot and routing failures through the existing `runError` banner
+(`ac4b713`).
+
+Browser validation (Chrome, three scenarios) confirmed all of it live: reload replay
+showed the full prior conversation; a pending card re-armed after reload and Allow
+completed the run; and restart survival held against the same database, pending
+approval intact. Console clean throughout. GIF: `~/Downloads/agui_event_log_replay.gif`.
+
+Taskwarrior: `fc4eb2d8` (event log / persistence) and `dbcb5569` (hardening batch) both
+close with this entry. `13f576dc` (rich rendering of plan/diff artifacts) and
+`d798cf14` (Playwright through the new plane) stay open — scoped out of this spec
+explicitly, unchanged by today's work.
