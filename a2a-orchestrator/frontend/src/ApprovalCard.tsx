@@ -105,7 +105,7 @@ export function ApprovalCard({
 
   return (
     <div
-      className="phosphor-approval rounded-sm border border-primary bg-[#0b120d]"
+      className="phosphor-approval rounded-sm border border-primary bg-[#0b120d] max-md:-mx-5"
       ref={(el) => {
         // Take focus on mount so ⇥/⏎ reach ALLOW first. No bare-key
         // shortcuts — too consequential.
@@ -119,7 +119,7 @@ export function ApprovalCard({
         <span className="text-[11px] font-bold tracking-[.14em]">PERMISSION REQUEST</span>
         <span className="text-[11px] font-medium">{shortId(permission.request_id)}</span>
       </div>
-      <div className="flex flex-col gap-3 px-4 py-3.5 max-md:-mx-4">
+      <div className="flex flex-col gap-3 px-4 py-3.5">
         <div className="text-[13.5px]">
           <span className="font-bold text-primary">{permission.tool}</span>
           <span className="text-muted-foreground"> — run command in </span>
