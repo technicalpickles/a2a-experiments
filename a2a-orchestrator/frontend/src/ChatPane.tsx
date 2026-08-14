@@ -5,7 +5,6 @@ import {
   useCopilotKit,
   useHumanInTheLoop,
 } from '@copilotkit/react-core/v2'
-import '@copilotkit/react-core/v2/styles.css'
 import { fetchPending, type ChatRef } from './api'
 import { ApprovalCard, type Permission } from './ApprovalCard'
 import { ReplayHttpAgent } from './agent'

@@ -1,30 +1,185 @@
-:root {
-  font-family: system-ui, sans-serif;
-  color-scheme: light dark;
+/* cockpit — "Phosphor" tokens + Tailwind v4.
+
+   Every custom-property name here is one CopilotKit v2 already defines in its
+   shipped globals.css (a Tailwind v4 build of the shadcn set). It scopes them
+   to [data-copilotkit], so we redeclare at the same selector — higher
+   specificity than :root — and the chat pane reskins with no component
+   overrides. Import order in main.tsx: CopilotKit's styles.css first, this
+   file after. Dark is the default; .dark lands on <html> pre-paint. */
+
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+:root,
+[data-copilotkit] {
+  --background: oklch(0.97 0.005 150);
+  --foreground: oklch(0.26 0.02 150);
+  --card: oklch(0.94 0.008 150);
+  --card-foreground: oklch(0.26 0.02 150);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.26 0.02 150);
+  --primary: oklch(0.55 0.16 145);
+  --primary-foreground: oklch(0.99 0.02 145);
+  --secondary: oklch(0.94 0.008 150);
+  --secondary-foreground: oklch(0.26 0.02 150);
+  --muted: oklch(0.92 0.06 150);
+  --muted-foreground: oklch(0.52 0.03 150);
+  --accent: oklch(0.95 0.02 150);
+  --accent-foreground: oklch(0.26 0.02 150);
+  --destructive: oklch(0.5 0.2 340);
+  --destructive-foreground: oklch(0.45 0.2 340);
+  --border: oklch(0.87 0.02 150);
+  --input: oklch(0.87 0.02 150);
+  --ring: oklch(0.55 0.16 145);
+  --radius: 0.125rem;
+
+  /* app-local, no CopilotKit equivalent */
+  --divider: oklch(0.88 0.02 150);
+  --divider-soft: oklch(0.92 0.015 150);
+  --primary-hover: oklch(0.6 0.17 145);
+  --primary-active: oklch(0.48 0.15 145);
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  color-scheme: light;
 }
 
-body {
-  margin: 0 auto;
-  padding: 1rem 2rem;
-  max-width: 60rem;
+.dark,
+.dark [data-copilotkit] {
+  --background: oklch(0.13 0.005 150);
+  --foreground: oklch(0.93 0.02 150);
+  --card: oklch(0.16 0.008 150);
+  --card-foreground: oklch(0.93 0.02 150);
+  --popover: oklch(0.16 0.008 150);
+  --popover-foreground: oklch(0.93 0.02 150);
+  --primary: oklch(0.88 0.19 145);
+  --primary-foreground: oklch(0.2 0.06 145);
+  --secondary: oklch(0.22 0.05 150);
+  --secondary-foreground: oklch(0.93 0.02 150);
+  --muted: oklch(0.22 0.05 150);
+  --muted-foreground: oklch(0.6 0.03 150);
+  --accent: oklch(0.18 0.02 150);
+  --accent-foreground: oklch(0.93 0.02 150);
+  --destructive: oklch(0.62 0.22 340);
+  --destructive-foreground: oklch(0.9 0.05 340);
+  --border: oklch(0.3 0.03 150);
+  --input: oklch(0.3 0.03 150);
+  --ring: oklch(0.88 0.19 145);
+
+  --divider: oklch(0.24 0.03 150);
+  --divider-soft: oklch(0.18 0.02 150);
+  --primary-hover: oklch(0.93 0.19 145);
+  --primary-active: oklch(0.79 0.17 145);
+
+  color-scheme: dark;
 }
 
-p.error {
-  color: crimson;
+/* Map the palette into Tailwind's theme so utilities resolve to the live
+   custom properties. The radius scale is pinned flat: Phosphor is 2px
+   everywhere, no ramp. font-sans is remapped to mono — no sans in Phosphor. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-divider: var(--divider);
+  --color-divider-soft: var(--divider-soft);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-active: var(--primary-active);
+
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+
+  --font-sans: var(--font-mono);
+
+  --animate-cockpit-blink: cockpit-blink 0.9s steps(1) infinite;
+
+  @keyframes cockpit-blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.15;
+    }
+  }
 }
 
-p.approval-done {
-  opacity: 0.6;
-  font-size: 0.9em;
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* One focus rule for the whole app — matches CopilotKit's focus-visible
+     ring behaviour without borrowing its 2px glow. */
+  :focus-visible {
+    outline: 1px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  a {
+    color: var(--primary);
+    text-decoration: none;
+    border-bottom: 1px solid color-mix(in oklch, var(--primary) 45%, transparent);
+  }
+
+  a:hover {
+    color: var(--primary-hover);
+    border-bottom-color: var(--primary-hover);
+  }
+
+  button,
+  select,
+  input,
+  textarea {
+    font: inherit;
+    color: inherit;
+    border-radius: var(--radius);
+  }
+
+  /* CopilotKit sets its own font stack on inner nodes; force mono. */
+  [data-copilotkit],
+  [data-copilotkit] * {
+    font-family: var(--font-mono);
+  }
 }
 
-aside.approval {
-  border: 1px solid darkorange;
-  border-radius: 4px;
-  padding: 0.5rem 1rem;
-  margin: 0.5rem 0;
-}
-
-aside.approval button {
-  margin-right: 0.5rem;
+/* Streaming caret: a block, not a bar, and un-eased on purpose. */
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 4px;
+  vertical-align: -2px;
+  background: var(--primary);
+  animation: cockpit-blink 0.9s steps(1) infinite;
 }

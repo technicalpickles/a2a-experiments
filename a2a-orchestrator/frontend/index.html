@@ -5,6 +5,12 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>cockpit</title>
+    <script>
+      const t =
+        localStorage.theme ??
+        (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      document.documentElement.classList.toggle('dark', t !== 'light')
+    </script>
   </head>
   <body>
     <div id="root"></div>
