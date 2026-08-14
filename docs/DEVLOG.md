@@ -1863,3 +1863,73 @@ Taskwarrior: `fc4eb2d8` (event log / persistence) and `dbcb5569` (hardening batc
 close with this entry. `13f576dc` (rich rendering of plan/diff artifacts) and
 `d798cf14` (Playwright through the new plane) stay open — scoped out of this spec
 explicitly, unchanged by today's work.
+
+## 2026-08-14 — cockpit's "Phosphor" redesign ships
+
+A design handoff bundle landed in `~/Downloads/design_handoff_cockpit_phosphor/` — README,
+HTML mocks (current vs. redesign), `tokens.css`, an implementation plan — the product of an
+external design session working from `docs/superpowers/specs/2026-08-14-cockpit-ui-redesign-brief.md`.
+"Phosphor": dark-first, all-monospace, phosphor-green accent, 2px flat radius everywhere, text
+glyphs instead of icons (`▸ ▾ ▴ ✕ ⏎ ↑↓ ↻ >`). The README was named design authority — where a
+mock and the README disagreed, the README won.
+
+Implementation followed `docs/superpowers/plans/2026-08-14-cockpit-phosphor.md` via
+subagent-driven development: six slices (`tokens-theme-wiring`, `app-shell`, `repo-picker`,
+`chat-stream-reskin`, `approval-card`, `error-surfaces`), each implemented by a subagent,
+reviewed, and fixed before the next started. Three fix rounds total — composer pointer-events /
+caret ownership / message gap on `chat-stream-reskin`, a mobile margin bug on `approval-card`,
+an `onArmed` memoization bug on `error-surfaces` — all caught in review, none surfaced later.
+`docs-and-upstream` (this entry) is the seventh and last slice; `visual-verification` is a
+separate orchestrator-driven pass against the mocks, not part of this doc slice.
+
+**Tech choices.** Tailwind v4 (`@tailwindcss/vite`) plus `class-variance-authority` for the
+button/card variants — Josh's call, and it matched the brief's own stated preference over hand-
+rolled CSS modules. `cmdk`/Radix were pulled in as dependencies but ultimately skipped for the
+repo picker: the design's trigger-as-input combobox (the filter text lives *in* the trigger,
+not behind a separate panel) doesn't fit cmdk's panel-input pattern, so the listbox is hand-
+rolled — filter, keyboard nav, match count, all local `useState`.
+
+**Theming CopilotKit.** The chat pane reskins through two mechanisms. First, a token override:
+CopilotKit v2 ships its own shadcn-style custom properties scoped to `[data-copilotkit]`
+(verified by reading the installed package, `@copilotkit/react-core` 1.67.1), so redeclaring
+the Phosphor palette at that same selector beats `:root` on specificity with zero component
+overrides — as long as `main.tsx` imports CopilotKit's `styles.css` *before* `index.css`, so
+the cascade order matches the specificity order. Second, the structural reskin (prefix-style
+messages, block caret, custom composer) rides CopilotKit v2's slot system:
+`messageView.assistantMessage` / `userMessage` / `cursor`, plus a top-level `input` slot on
+`<CopilotChat>`. `CopilotChatToolCallsView` stayed nested inside the custom assistant message
+rather than getting pulled out, because it's the only path in the v2 API that actually invokes
+HITL `render()` callbacks — pull it out and the approval card stops rendering.
+
+**Findings that shaped the implementation, all verified against 1.67.1 shipped source:**
+
+- The `input` slot renders inside a `pointer-events-none` overlay (`CopilotChatView`'s own
+  input wrapper carries `cpk:pointer-events-auto` to punch back through it); a custom composer
+  that doesn't set the same class is mouse-dead — clicks and the send button do nothing, only
+  Tab-focus works. First shipped broken, caught in `chat-stream-reskin`'s review.
+- `MemoizedAssistantMessage`'s comparator never re-renders a message once it stops being the
+  last one in the thread, so an inline `isRunning && isLast` streaming caret can go stale and
+  stick on permanently once a later message arrives. The design called for the caret sitting at
+  the end of the streaming text; the fix moves caret ownership entirely to the `cursor` slot
+  (which `CopilotChatMessageView` already re-renders correctly), a deviation from the mock that
+  Josh approved during review rather than something discovered and shipped silently.
+- `useHumanInTheLoop`'s `render` callback is frozen at first tool-call registration — the
+  effect's dependency array excludes `render` itself, so a closure captured at mount time is
+  what actually runs on every subsequent call, not whatever the latest render passed. Anything
+  the render callback closes over (`repo`, `onPendingChange`) has to be stable across the
+  component's lifetime, not just correct at the moment it's read.
+
+**Known, deliberate gaps** — not bugs, just data the backend doesn't expose yet: `RepoEntry`
+has no reachability field, so the "unreachable repo, dimmed and unselectable" state from the
+mocks is skipped entirely, every repo row renders selectable; `ChatRef` has no status field, so
+nested chat rows never show the `·paused`/`·running` suffix; and the block-style typing caret
+in *editable* inputs (repo filter, composer) uses native `caret-color: var(--primary)` instead
+of a simulated block caret, because a real `<input>` can't render a fake block caret without
+also hiding the real one — only the *streaming* caret in assistant messages is the actual 7×14
+block.
+
+Two CopilotKit gaps the design ran into are written up as upstream leads in `docs/UPSTREAM.md`:
+HITL `render()` losing the resolved decision once a call reaches `status === 'complete'`
+(the approval card's post-reload receipt has to fall back to a neutral "ANSWERED" rather than
+the true "ALLOWED"/"DENIED"), and `RUN_ERROR` having no supported hook to clear a sticky error
+banner short of remounting the whole chat pane.

@@ -754,6 +754,77 @@ Noted here so the decision not to file is a decision rather than an oversight.
 
 ---
 
+## @copilotkit/react-core (`CopilotKit/CopilotKit`)
+
+Two gaps found 2026-08-14 building cockpit's "Phosphor" redesign
+(`docs/superpowers/plans/2026-08-14-cockpit-phosphor.md`), both against
+`@copilotkit/react-core@1.67.1`, both drafts — neither has been re-derived against the
+package's current shipped source since, per this doc's own rule that a lead is not a verified
+claim until that pass happens.
+
+### HITL `render()` remembers no decision once `status` is `'complete'`
+
+**Task:** `e340d022` (open)
+
+`useHumanInTheLoop`'s render callback receives `{ args, status, respond }` — nothing else.
+Once a tool call transitions to `status === 'complete'`, there is no field on the callback's
+arguments carrying which way it resolved. Confirmed by reading the installed 1.67.1 types:
+`status` derives from live tool-call execution state, not from the resolved result or the
+arguments `respond()` was called with.
+
+That's invisible inside a single continuous session — the component can hold local state
+memorizing what it called `respond()` with, and use that for the terminal render. It breaks on
+reload. Cockpit's chat pane replays prior history through CopilotKit's own connect handshake
+(see the 2026-08-13 DEVLOG entry on the AG-UI event log), which rehydrates the message list and
+lands the HITL card back at `status === 'complete'` with no local state to fall back on — the
+component genuinely cannot tell, from anything CopilotKit gives it, whether the request was
+allowed or denied.
+
+Cockpit's workaround is honest but weaker than the real answer: `ApprovalCard.tsx:69-71` falls
+back to a neutral "ANSWERED" receipt when local state is empty, rather than asserting a false
+"ALLOWED"/"DENIED". The framework already has the real answer — it's sitting in the tool
+call's resolved result — it just doesn't hand it to `render()`.
+
+**Fix shape:** pass the resolved arguments/result into `render()` once `status === 'complete'`,
+even just echoing back whatever `respond()` was invoked with, so a receipt UI can recover the
+true decision after a reload instead of only while the component happens to still be mounted.
+
+**How to lead:** the callback's own type is the evidence — `args`/`status`/`respond`, no
+result — paired with the reload repro (correct answer available in-session, unrecoverable after
+remount). No design argument needed, it's a clean before/after.
+
+**Cite:** `a2a-orchestrator/frontend/src/ChatPane.tsx:57-62` (comment above `PendingRearm`
+documenting the same status-derives-from-live-execution finding), `.../src/ApprovalCard.tsx:69-71`
+(the fallback and its comment).
+
+### `RUN_ERROR` has no supported way to clear a sticky error banner on the next run
+
+**Task:** `13d538c4` (open)
+
+`CopilotChat` swallows AG-UI's `RUN_ERROR` event into a console log by default, with no
+in-flow UI trace — cockpit's `onError` prop is what surfaces it at all
+(`ChatPane.tsx:139-143`, `216-222`). Once an app-level error banner is set from that callback,
+there's no supported hook to clear it when the next run starts or succeeds. Verified against
+1.67.1: there's no `onRunStart`-equivalent callback, and `CopilotChat` neither clears its own
+internal error state on a fresh run nor exposes a way for a consumer to null out state derived
+from a prior `onError` call.
+
+Cockpit's workaround is a manual "↻ remount" control inside the error banner
+(the `error-surfaces` slice) — the only way to dismiss it short of a real recovered run is to
+tear down and recreate the whole `CopilotKitProvider`/`CopilotChat` subtree, keyed by a nonce
+bumped from outside. That's a heavier reset than the actual problem (one stale string in
+component state) should require.
+
+**Fix shape:** an `onRunStart` callback, or a `clearError`/reset function returned alongside
+the error state, so an app-level banner can be cleared the moment a new run begins without
+forcing a full remount.
+
+**Cite:** `a2a-orchestrator/frontend/src/ChatPane.tsx:139-143` (the comment describing the gap
+directly), `.superpowers/sdd/2026-08-14-cockpit-phosphor/error-surfaces-report.md` (the
+remount-based workaround this gap forced).
+
+---
+
 ## Filing order
 
 1. ~~**`79297b49` + `167506a4` to a2a-sdk, together.**~~ **DONE** — one issue,
