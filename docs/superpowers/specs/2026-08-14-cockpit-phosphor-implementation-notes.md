@@ -103,6 +103,9 @@ Two things about this wiring that aren't obvious from the slot API alone:
   registration — the effect's dependency array excludes `render` itself. Anything the render
   callback reads from outer scope (`repo`, `onPendingChange` in `PermissionTool`) has to be
   stable for the component's whole lifetime, not just correct at the moment it's passed in.
+- Motion is `transition-colors` at 120ms linear and the blinking caret/dot, nothing else — the
+  one sanctioned exception to the no-transforms rule is the mobile sidebar drawer, which slides
+  in on `transition-transform` at 120ms per the plan's app-shell spec.
 - Two CopilotKit gaps this design ran into (HITL `render()` losing the resolved decision after
   `status === 'complete'`, and `RUN_ERROR` having no clear-on-next-run hook) are written up as
   upstream leads in `docs/UPSTREAM.md`, under `@copilotkit/react-core`.

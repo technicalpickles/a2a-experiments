@@ -11,6 +11,7 @@ import {
 import { fetchPending, type ChatRef } from './api'
 import { ApprovalCard, type DecisionMemory, type Permission } from './ApprovalCard'
 import { ReplayHttpAgent } from './agent'
+import { ErrorStrip } from './ErrorStrip'
 import {
   ChatUiContext,
   PhosphorAssistantMessage,
@@ -196,20 +197,10 @@ export function ChatPane({
   )
   return (
     <section className="flex h-full min-h-0 flex-col">
-      {runError && (
-        <div className="flex items-center gap-2.5 border-b border-[oklch(0.40_0.14_340)] bg-[oklch(0.20_0.07_340)] px-4 py-2 text-[12px]">
-          <span className="font-bold text-[oklch(0.80_0.20_340)]">ERR</span>
-          <span className="min-w-0 flex-1 truncate">run failed: {runError}</span>
-          {onRemount && (
-            <button
-              onClick={onRemount}
-              className="shrink-0 cursor-pointer border-none bg-transparent text-[11px] text-[oklch(0.80_0.20_340)] hover:text-white"
-            >
-              ↻ remount
-            </button>
-          )}
-        </div>
-      )}
+      <ErrorStrip
+        message={runError ? `run failed: ${runError}` : ''}
+        action={onRemount ? { label: '↻ remount', onClick: onRemount } : undefined}
+      />
       {rearmed && (
         <p className="m-0 px-4 py-1 text-[11px] text-muted-foreground">
           {'// reload detected · pending approval re-armed via runTool()'}

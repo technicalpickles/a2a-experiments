@@ -76,8 +76,9 @@ export function PhosphorComposer({ onSubmitMessage, isRunning }: CopilotChatInpu
   }
   if (approvalPending) {
     return (
-      <div className="pointer-events-auto flex items-center gap-2 rounded-sm border border-dashed border-border bg-[#0a0b0a] px-3.5 py-3 text-[12px] text-muted-foreground">
-        answer the permission request to continue
+      <div className="pointer-events-auto flex items-center gap-2 rounded-sm border border-dashed border-border bg-background px-3.5 py-3 text-[12px] text-muted-foreground dark:bg-[#0a0b0a]">
+        <span className="select-none">&gt;</span>
+        <span>answer the permission request to continue</span>
       </div>
     )
   }

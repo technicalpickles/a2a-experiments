@@ -9,6 +9,7 @@ import {
   type RepoEntry,
 } from './api'
 import { ChatPane } from './ChatPane'
+import { ErrorStrip } from './ErrorStrip'
 import { RepoPicker } from './RepoPicker'
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
@@ -50,30 +51,6 @@ function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }
     <Button variant="ghost" size="sm" onClick={onToggle}>
       {theme === 'dark' ? '[DARK]' : '[LIGHT]'}
     </Button>
-  )
-}
-
-function ErrorStrip({
-  error,
-  onDismiss,
-}: {
-  error: string
-  onDismiss?: () => void
-}) {
-  if (!error) return null
-  return (
-    <div className="flex items-center gap-2.5 border-b border-[oklch(0.40_0.14_340)] bg-[oklch(0.20_0.07_340)] px-4 py-2 text-[12px]">
-      <span className="font-bold text-[oklch(0.80_0.20_340)]">ERR</span>
-      <span className="min-w-0 flex-1 truncate">{error}</span>
-      {onDismiss && (
-        <button
-          onClick={onDismiss}
-          className="shrink-0 cursor-pointer border-none bg-transparent text-[11px] text-[oklch(0.80_0.20_340)] hover:text-white"
-        >
-          ✕ dismiss
-        </button>
-      )}
-    </div>
   )
 }
 
@@ -137,7 +114,7 @@ export default function App() {
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </header>
 
-        <ErrorStrip error={error} onDismiss={() => setError('')} />
+        <ErrorStrip message={error} action={{ label: '✕ dismiss', onClick: () => setError('') }} />
 
         <div className="flex items-baseline gap-3 px-5 pt-4 pb-2">
           <span className="text-[10.5px] tracking-[.16em] text-muted-foreground">MISSIONS/</span>
@@ -318,7 +295,7 @@ export default function App() {
           </div>
         </header>
 
-        <ErrorStrip error={error} onDismiss={() => setError('')} />
+        <ErrorStrip message={error} action={{ label: '✕ dismiss', onClick: () => setError('') }} />
 
         {chat ? (
           <div className="min-h-0 flex-1">
