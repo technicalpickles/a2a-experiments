@@ -9,6 +9,7 @@ import {
   type RepoEntry,
 } from './api'
 import { ChatPane } from './ChatPane'
+import { RepoPicker } from './RepoPicker'
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
 
@@ -277,20 +278,7 @@ export default function App() {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <select
-              value={repoChoice}
-              onChange={(e) => setRepoChoice(e.target.value)}
-              className="h-8 rounded-sm border border-border bg-transparent px-2.5 text-[12px]"
-            >
-              <option value="" disabled>
-                select repo
-              </option>
-              {repos.map((r) => (
-                <option key={r.name} value={r.name}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
+            <RepoPicker repos={repos} value={repoChoice} onChange={setRepoChoice} />
             <Button
               variant={repoChoice ? 'primary' : 'secondary'}
               size="md"
