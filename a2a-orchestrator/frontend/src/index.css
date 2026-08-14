@@ -185,6 +185,17 @@
   padding: 4px 10px;
 }
 
+/* ApprovalCard (the request_permission HITL render) mounts inside
+   .phosphor-tool-calls like any other tool call, but it's a full card with
+   its own border/background — undo the strip treatment above so the two
+   don't stack. */
+.phosphor-tool-calls:has(.phosphor-approval) {
+  border-left: none;
+  background: transparent;
+  font-size: 13px;
+  padding: 0;
+}
+
 /* Streaming caret: a block, not a bar, and un-eased on purpose. */
 .caret {
   display: inline-block;

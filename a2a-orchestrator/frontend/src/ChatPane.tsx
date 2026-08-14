@@ -23,17 +23,30 @@ import {
 // model): args are a2acode's permission payload verbatim, the result is
 // {decision}. respond() resolves into a role:"tool" message and CopilotKit
 // fires the follow-up run; the service resumes the pending task from it.
-function PermissionTool() {
+//
+// Both 'executing' and 'complete' render the same ApprovalCard so the
+// component instance (and its `sent` state) survives the status
+// transition, instead of remounting into a stateless "answered" line that
+// loses which request was answered and how.
+function PermissionTool({
+  repo,
+  onPendingChange,
+}: {
+  repo: string
+  onPendingChange: (pending: boolean) => void
+}) {
   useHumanInTheLoop({
     name: 'request_permission',
     description: 'Ask the user to allow or deny a tool use',
     render: ({ args, status, respond }) => {
-      if (status === 'complete') return <p className="approval-done">answered</p>
-      if (status !== 'executing') return <></>
+      if (status !== 'executing' && status !== 'complete') return <></>
       return (
         <ApprovalCard
           permission={args as unknown as Permission}
+          repo={repo}
+          status={status}
           onAnswer={(decision) => respond?.({ decision })}
+          onPendingChange={onPendingChange}
         />
       )
     },
@@ -120,12 +133,15 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
   // hook clears it on the next run (see report), so the banner is sticky
   // until the chat is remounted.
   const [runError, setRunError] = useState('')
-  // approvalPending is hardcoded false until approval-card wires real state;
-  // useMemo keeps the context value stable across renders so consumers don't
-  // re-render on every ChatPane render.
+  // Tracks whether the live ApprovalCard has a pending (unanswered)
+  // permission request, driven by ApprovalCard's onPendingChange. Gates the
+  // composer via ChatUiContext (PhosphorComposer). useMemo keeps the context
+  // value stable across renders so consumers don't re-render on every
+  // ChatPane render.
+  const [approvalPending, setApprovalPending] = useState(false)
   const chatUiValue = useMemo(
-    () => ({ repoName: chat.agent, approvalPending: false }),
-    [chat.agent],
+    () => ({ repoName: chat.agent, approvalPending }),
+    [chat.agent, approvalPending],
   )
   // The messageView slot props object is a literal in JSX; without this
   // memo, ChatPane re-renders (e.g. every setRunError) hand CopilotChat a
@@ -144,7 +160,7 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
     <section className="flex h-full min-h-0 flex-col">
       {runError && <p className="error">run failed: {runError}</p>}
       <CopilotKitProvider agents__unsafe_dev_only={agents}>
-        <PermissionTool />
+        <PermissionTool repo={chat.agent} onPendingChange={setApprovalPending} />
         <PendingRearm
           contextId={chat.context_id}
           agent={agents[chat.context_id]}
