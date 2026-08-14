@@ -148,7 +148,7 @@ export default function App() {
         </div>
 
         {missions.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 px-5 pt-[120px] text-center">
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 text-center">
             <span className="text-[12px] tracking-[.14em] text-muted-foreground">
               NO MISSIONS YET
             </span>
@@ -242,13 +242,16 @@ export default function App() {
                     setDrawerOpen(false)
                   }}
                   className={cn(
-                    'w-full rounded-sm px-2 py-1.5 text-left text-[12.5px] focus-visible:-outline-offset-1',
+                    'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left text-[12.5px] focus-visible:-outline-offset-1 max-md:min-h-11',
                     selected
                       ? 'border-y border-[oklch(0.34_0.06_150)] bg-muted font-medium'
                       : 'hover:bg-accent',
                   )}
                 >
-                  {m.title}
+                  <span className={selected ? 'text-primary' : 'text-[oklch(0.50_0.03_150)]'}>
+                    ▸
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{m.title}</span>
                 </button>
                 {selected && m.chats.length > 0 && (
                   <ul className="flex flex-col gap-0.5 pl-[30px]">
@@ -260,7 +263,7 @@ export default function App() {
                             setChat(c)
                             setDrawerOpen(false)
                           }}
-                          className="w-full rounded-sm py-1 text-left text-[12px] text-primary hover:bg-accent focus-visible:-outline-offset-1"
+                          className="flex w-full items-center rounded-sm py-1 text-left text-[12px] text-primary hover:bg-accent focus-visible:-outline-offset-1 max-md:min-h-11"
                         >
                           {c.agent}
                         </button>
@@ -274,7 +277,12 @@ export default function App() {
         </ul>
 
         <div className="mt-auto pt-4">
-          <Button variant="ghost" size="sm" className="text-primary" onClick={startMission}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-primary max-md:min-h-11"
+            onClick={startMission}
+          >
             [+] NEW MISSION
           </Button>
         </div>

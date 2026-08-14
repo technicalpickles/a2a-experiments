@@ -9,7 +9,7 @@ import {
   type CopilotChatUserMessage,
 } from '@copilotkit/react-core/v2'
 import { fetchPending, type ChatRef } from './api'
-import { ApprovalCard, type Permission } from './ApprovalCard'
+import { ApprovalCard, type DecisionMemory, type Permission } from './ApprovalCard'
 import { ReplayHttpAgent } from './agent'
 import {
   ChatUiContext,
@@ -24,15 +24,26 @@ import {
 // {decision}. respond() resolves into a role:"tool" message and CopilotKit
 // fires the follow-up run; the service resumes the pending task from it.
 //
-// Both 'executing' and 'complete' render the same ApprovalCard so the
-// component instance (and its `sent` state) survives the status
-// transition, instead of remounting into a stateless "answered" line that
-// loses which request was answered and how.
+// Both 'executing' and 'complete' render the same ApprovalCard, but the
+// card does NOT survive between them. Measured live (1.67.1): the
+// toolCallId is stable across the answer, yet CopilotKit's ToolCallRenderer
+// derives status from two independent sources — `executingToolCallIds` and
+// the tool result message — and respond() clears the first several hundred
+// ms before the follow-up run delivers the second. That gap renders as
+// `inProgress`, which this render answers with an empty fragment, so React
+// unmounts ApprovalCard and any useState inside it dies before `complete`
+// ever arrives. Hence the decision memory lives out here.
+//
+// Keyed by request_id rather than toolCallId, because the reload path's
+// runTool() re-arm mints a fresh toolCallId for the same request — the id
+// the service reconciles on is the one worth remembering.
 function PermissionTool({
   repo,
+  decisions,
   onPendingChange,
 }: {
   repo: string
+  decisions: DecisionMemory
   onPendingChange: (pending: boolean) => void
 }) {
   useHumanInTheLoop({
@@ -40,12 +51,21 @@ function PermissionTool({
     description: 'Ask the user to allow or deny a tool use',
     render: ({ args, status, respond }) => {
       if (status !== 'executing' && status !== 'complete') return <></>
+      const permission = args as unknown as Permission
       return (
         <ApprovalCard
-          permission={args as unknown as Permission}
+          permission={permission}
           repo={repo}
           status={status}
-          onAnswer={(decision) => respond?.({ decision })}
+          decisions={decisions}
+          onAnswer={(decision) => {
+            // Record before respond(): the teardown starts as soon as the
+            // answer is in flight.
+            if (permission.request_id) {
+              decisions.set(permission.request_id, { decision, at: new Date() })
+            }
+            respond?.({ decision })
+          }}
           onPendingChange={onPendingChange}
         />
       )
@@ -148,6 +168,12 @@ export function ChatPane({
   // value stable across renders so consumers don't re-render on every
   // ChatPane render.
   const [approvalPending, setApprovalPending] = useState(false)
+  // Decision memory for answered approvals, keyed by request_id. A ref, not
+  // state: nothing re-renders off it — the receipt that reads it renders
+  // after the write, on the remount PermissionTool's comment describes.
+  // Per-chat, so switching chats can't leak one mission's answers into
+  // another's transcript.
+  const decisions = useRef<DecisionMemory>(new Map()).current
   // Tracks whether a pending approval was re-armed via runTool.
   const [rearmed, setRearmed] = useState(false)
   const handleArmed = useCallback(() => setRearmed(true), [])
@@ -190,7 +216,11 @@ export function ChatPane({
         </p>
       )}
       <CopilotKitProvider agents__unsafe_dev_only={agents}>
-        <PermissionTool repo={chat.agent} onPendingChange={setApprovalPending} />
+        <PermissionTool
+          repo={chat.agent}
+          decisions={decisions}
+          onPendingChange={setApprovalPending}
+        />
         <PendingRearm
           contextId={chat.context_id}
           agent={agents[chat.context_id]}

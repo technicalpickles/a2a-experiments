@@ -8,7 +8,16 @@ export interface Permission {
   description?: string
 }
 
-type Decision = 'allow' | 'deny'
+export type Decision = 'allow' | 'deny'
+
+export interface DecisionRecord {
+  decision: Decision
+  at: Date
+}
+
+// Which request_id was answered, how, and when. Owned by ChatPane (see the
+// comment there) because this component does not survive the answer.
+export type DecisionMemory = Map<string, DecisionRecord>
 
 function shortId(id: string) {
   return id.replace(/-/g, '').slice(0, 6)
@@ -43,16 +52,18 @@ export function ApprovalCard({
   permission,
   repo,
   status,
+  decisions,
   onAnswer,
   onPendingChange,
 }: {
   permission: Permission
   repo: string
   status: 'executing' | 'complete'
+  decisions: DecisionMemory
   onAnswer: (decision: Decision) => void
   onPendingChange: (pending: boolean) => void
 }) {
-  const [sent, setSent] = useState<{ decision: Decision; at: Date } | null>(null)
+  const [sent, setSent] = useState<DecisionRecord | null>(null)
   const answering = sent !== null && status === 'executing'
   const pending = status === 'executing'
 
@@ -66,12 +77,15 @@ export function ApprovalCard({
     onAnswer(decision)
   }
 
-  // Receipts stay in the transcript. A reload leaves no memory of the
-  // decision (CopilotKit's HITL render only exposes status), so fall back
-  // to a neutral ANSWERED receipt.
+  // Receipts stay in the transcript. `sent` covers the render right after
+  // the click; ChatPane's decision memory covers everything after, because
+  // this component gets torn down on the way to `complete` (see ChatPane).
+  // Only a genuine reload — nothing in this session answered this
+  // request_id — falls through to the neutral ANSWERED receipt.
   if (status === 'complete') {
-    const denied = sent?.decision === 'deny'
-    const meta = `${shortId(permission.request_id)}${sent ? ' · ' + clock(sent.at) : ''}`
+    const record = sent ?? decisions.get(permission.request_id) ?? null
+    const denied = record?.decision === 'deny'
+    const meta = `${shortId(permission.request_id)}${record ? ' · ' + clock(record.at) : ''}`
     return (
       <div
         className={
@@ -83,7 +97,7 @@ export function ApprovalCard({
       >
         <div className="flex items-center justify-between px-4 pt-2.5 text-[11px] tracking-[.14em]">
           <span className={denied ? 'text-[oklch(0.82_0.14_340)]' : 'text-[oklch(0.70_0.02_150)]'}>
-            {sent ? (denied ? 'DENIED' : 'ALLOWED') : 'ANSWERED'}
+            {record ? (denied ? 'DENIED' : 'ALLOWED') : 'ANSWERED'}
           </span>
           <span className="tracking-normal text-muted-foreground">{meta}</span>
         </div>
