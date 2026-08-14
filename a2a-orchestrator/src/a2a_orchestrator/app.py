@@ -30,7 +30,7 @@ def build_app(
         timeout = httpx.Timeout(120.0, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as http:
             app.state.http = http
-            app.state.conversations = Conversations(http)
+            app.state.conversations = Conversations(http, app.state.store)
             yield
 
     routes = [
@@ -39,7 +39,9 @@ def build_app(
         Route("/api/missions", api.create_mission, methods=["POST"]),
         Route("/api/missions/{mission_id}", api.rename_mission, methods=["PATCH"]),
         Route("/api/missions/{mission_id}/chats", api.open_chat, methods=["POST"]),
+        Route("/api/chats/{context_id}/pending", api.chat_pending, methods=["GET"]),
         Route("/agui/run", agui.run_agent, methods=["POST"]),
+        Route("/agui/connect", agui.connect_agent, methods=["POST"]),
     ]
     if frontend_dist and frontend_dist.is_dir():
         routes.append(Mount("/", StaticFiles(directory=frontend_dist, html=True)))

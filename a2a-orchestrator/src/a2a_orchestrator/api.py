@@ -7,6 +7,8 @@ lifespan in app.py owns their lifetimes. Error bodies always carry an
 
 from __future__ import annotations
 
+import json
+
 import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -101,3 +103,14 @@ async def open_chat(request: Request) -> JSONResponse:
         )
     chat = store.create_chat(mission.id, agent, entry.base_url)
     return JSONResponse(_chat_json(chat), status_code=201)
+
+
+async def chat_pending(request: Request) -> JSONResponse:
+    store = request.app.state.store
+    chat = store.chat_for_context(request.path_params["context_id"])
+    if chat is None:
+        return JSONResponse({"error": "no such chat"}, status_code=404)
+    pending = store.pending_of(chat.context_id)
+    return JSONResponse(
+        {"pending": json.loads(pending.payload) if pending else None}
+    )

@@ -16,9 +16,20 @@ from a2a.types import (
     TaskStatus,
     TaskStatusUpdateEvent,
 )
-from ag_ui.core import RunAgentInput
+from ag_ui.core import (
+    RunAgentInput,
+    RunErrorEvent,
+    RunFinishedEvent,
+    RunStartedEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallStartEvent,
+)
 
-from a2a_orchestrator.translate import PERMISSION_TOOL, RunTranslator, Turn, incoming_turn
+from a2a_orchestrator.translate import PERMISSION_TOOL, RunTranslator, Turn, fold_messages, incoming_turn
 
 
 def task_event(task_id="t1", context_id="c1"):
@@ -81,7 +92,7 @@ def test_completed_turn_streams_text_and_finishes():
     ends = [e for e in out if e.type.value == "TEXT_MESSAGE_END"]
     assert starts[0].message_id == ends[0].message_id
     assert translator.task_id == "t1"
-    assert translator.parked is None
+    assert translator.pending is None
 
 
 def test_working_narration_becomes_step_pairs():
@@ -98,7 +109,7 @@ def test_working_narration_becomes_step_pairs():
     assert out[0].step_name == "Using tool: Read"
 
 
-def test_permission_parks_as_a_tool_call():
+def test_permission_pends_as_a_tool_call():
     permission = {"tool": "Bash", "request_id": "req-1", "input": {"command": "pytest"}}
     translator = RunTranslator("th1", "r1")
     out = drain(
@@ -127,7 +138,7 @@ def test_permission_parks_as_a_tool_call():
     assert start.tool_call_name == PERMISSION_TOOL
     assert start.tool_call_id == "req-1"
     assert json.loads(args.delta) == permission
-    assert translator.parked == permission
+    assert translator.pending == permission
     assert translator.task_id == "t1"
 
 
@@ -170,7 +181,34 @@ def test_canceled_turn_finishes_with_a_note():
 def test_unknown_payloads_pass_through_as_custom():
     translator = RunTranslator("th1", "r1")
     out = drain(translator, [StreamResponse()])
-    assert types_of(out) == ["CUSTOM", "RUN_FINISHED"]
+    assert types_of(out) == ["CUSTOM", "RUN_ERROR"]
+
+
+def test_stream_ending_without_terminal_state_is_a_run_error():
+    translator = RunTranslator("th1", "r1")
+    out = drain(translator, [task_event(), artifact_event("half an ans")])
+    assert types_of(out) == ["TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+                             "TEXT_MESSAGE_END", "RUN_ERROR"]
+    assert "terminal state" in out[-1].message
+    assert translator.truncated
+
+
+def test_terminal_states_are_not_truncation():
+    translator = RunTranslator("th1", "r1")
+    drain(translator, [task_event(), status_event(TaskState.TASK_STATE_COMPLETED)])
+    assert not translator.truncated
+
+
+def test_pending_permission_captures_the_call_id():
+    permission = {"tool": "Bash", "request_id": "req-1", "input": {}}
+    translator = RunTranslator("th1", "r1")
+    drain(
+        translator,
+        [task_event(), status_event(TaskState.TASK_STATE_INPUT_REQUIRED,
+                                    text="Bash",
+                                    metadata={"a2acode_permission": permission})],
+    )
+    assert translator.call_id == "req-1"
 
 
 def run_input(messages):
@@ -214,7 +252,7 @@ def test_trailing_tool_result_is_a_resume():
             ]
         )
     )
-    assert turn == Turn(kind="resume", text="allow")
+    assert turn == Turn(kind="resume", text="allow", tool_call_id="req-1")
 
 
 def test_bare_string_decision_also_works():
@@ -223,7 +261,7 @@ def test_bare_string_decision_also_works():
             [{"id": "m1", "role": "tool", "toolCallId": "req-1", "content": "deny"}]
         )
     )
-    assert turn == Turn(kind="resume", text="deny")
+    assert turn == Turn(kind="resume", text="deny", tool_call_id="req-1")
 
 
 def test_unknown_decision_refuses_loudly():
@@ -247,3 +285,105 @@ def test_multimodal_user_message_refuses_loudly():
                 [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "hi"}]}]
             )
         )
+
+
+def test_resume_reads_request_id_from_the_answered_call():
+    turn = incoming_turn(
+        run_input(
+            [
+                {"id": "m1", "role": "user", "content": "please run the tests"},
+                {
+                    "id": "m2",
+                    "role": "assistant",
+                    "toolCalls": [
+                        {
+                            "id": "call-9",
+                            "type": "function",
+                            "function": {
+                                "name": "request_permission",
+                                "arguments": '{"request_id": "req-7", "tool": "Bash"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": "m3",
+                    "role": "tool",
+                    "toolCallId": "call-9",
+                    "content": '{"decision": "allow"}',
+                },
+            ]
+        )
+    )
+    assert turn == Turn(
+        kind="resume", text="allow", tool_call_id="call-9", request_id="req-7"
+    )
+
+
+def test_resume_without_history_still_carries_the_tool_call_id():
+    turn = incoming_turn(
+        run_input(
+            [{"id": "m1", "role": "tool", "toolCallId": "req-1", "content": "deny"}]
+        )
+    )
+    assert turn == Turn(kind="resume", text="deny", tool_call_id="req-1")
+
+
+def out_row(seq, event):
+    return (seq, "out", event.model_dump_json(by_alias=True, exclude_none=True))
+
+
+def in_row(seq, message: dict):
+    return (seq, "in", json.dumps(message))
+
+
+def test_fold_concatenates_text_deltas():
+    rows = [
+        out_row(1, RunStartedEvent(thread_id="th1", run_id="r1")),
+        in_row(2, {"id": "u1", "role": "user", "content": "hello"}),
+        out_row(3, TextMessageStartEvent(message_id="m1")),
+        out_row(4, TextMessageContentEvent(message_id="m1", delta="Ready ")),
+        out_row(5, TextMessageContentEvent(message_id="m1", delta="when you are")),
+        out_row(6, TextMessageEndEvent(message_id="m1")),
+        out_row(7, RunFinishedEvent(thread_id="th1", run_id="r1")),
+    ]
+    messages = fold_messages(rows)
+    assert [(m.role, m.id) for m in messages] == [("user", "u1"), ("assistant", "m1")]
+    assert messages[0].content == "hello"
+    assert messages[1].content == "Ready when you are"
+
+
+def test_fold_pairs_tool_calls_with_their_results():
+    permission = {"tool": "Bash", "request_id": "req-1", "input": {}}
+    rows = [
+        in_row(1, {"id": "u1", "role": "user", "content": "please run the tests"}),
+        out_row(2, ToolCallStartEvent(tool_call_id="req-1",
+                                      tool_call_name="request_permission")),
+        out_row(3, ToolCallArgsEvent(tool_call_id="req-1",
+                                     delta=json.dumps(permission))),
+        out_row(4, ToolCallEndEvent(tool_call_id="req-1")),
+        in_row(5, {"id": "t1", "role": "tool", "toolCallId": "req-1",
+                   "content": '{"decision": "allow"}'}),
+    ]
+    messages = fold_messages(rows)
+    assert [m.role for m in messages] == ["user", "assistant", "tool"]
+    call = messages[1].tool_calls[0]
+    assert messages[1].id == "call-req-1"
+    assert call.id == "req-1"
+    assert call.function.name == "request_permission"
+    assert json.loads(call.function.arguments) == permission
+
+
+def test_fold_marks_failed_runs():
+    rows = [
+        in_row(1, {"id": "u1", "role": "user", "content": "status check please"}),
+        out_row(2, RunErrorEvent(message="terraform provider exploded")),
+    ]
+    messages = fold_messages(rows)
+    assert messages[-1].id == "error-2"
+    assert messages[-1].role == "assistant"
+    assert "terraform provider exploded" in messages[-1].content
+
+
+def test_fold_of_nothing_is_empty():
+    assert fold_messages([]) == []

@@ -3,7 +3,7 @@
 Outbound: RunTranslator turns one A2A turn's stream events into AG-UI events.
 Inbound (added in the translate-inbound task): incoming_turn decides whether a
 RunAgentInput is a fresh user message or a permission decision resuming a
-parked task.
+pending task.
 
 Stateful across one run on purpose: artifact chunks stream as one assistant
 message (START once, a CONTENT delta per chunk, END at close), and terminal
@@ -21,8 +21,11 @@ from typing import Any, Literal
 
 from a2a.types import StreamResponse, TaskState
 from ag_ui.core import (
+    AssistantMessage,
     BaseEvent,
     CustomEvent,
+    FunctionCall,
+    Message,
     RunAgentInput,
     RunErrorEvent,
     RunFinishedEvent,
@@ -31,6 +34,7 @@ from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    ToolCall,
     ToolCallArgsEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
@@ -38,6 +42,7 @@ from ag_ui.core import (
     UserMessage,
 )
 from google.protobuf.json_format import MessageToDict
+from pydantic import TypeAdapter
 
 PERMISSION_KEY = "a2acode_permission"
 PERMISSION_TOOL = "request_permission"
@@ -61,7 +66,9 @@ class RunTranslator:
         self.thread_id = thread_id
         self.run_id = run_id
         self.task_id = ""
-        self.parked: dict[str, Any] | None = None
+        self.pending: dict[str, Any] | None = None
+        self.call_id = ""
+        self.truncated = False
         self._message_id = ""
         self._final_state = ""
         self._final_text = ""
@@ -84,14 +91,20 @@ class RunTranslator:
 
     def finish(self) -> list[BaseEvent]:
         events = self._close_text()
+        if not self._final_state:
+            # The upstream stream ended without completing, failing, or asking
+            # for input — surface it, don't launder it (spec: Hardening #1).
+            self.truncated = True
+            events.append(
+                RunErrorEvent(message="upstream stream ended without a terminal state")
+            )
+            return events
         if self._final_state == "failed":
             events.append(RunErrorEvent(message=self._final_text or "task failed"))
             return events
         if self._final_state == "canceled":
             events.append(CustomEvent(name="canceled", value={"text": self._final_text}))
-        events.append(
-            RunFinishedEvent(thread_id=self.thread_id, run_id=self.run_id)
-        )
+        events.append(RunFinishedEvent(thread_id=self.thread_id, run_id=self.run_id))
         return events
 
     def _status(self, update) -> list[BaseEvent]:
@@ -107,14 +120,14 @@ class RunTranslator:
             status.state == TaskState.TASK_STATE_INPUT_REQUIRED
             and PERMISSION_KEY in metadata
         ):
-            self.parked = metadata[PERMISSION_KEY]
+            self.pending = metadata[PERMISSION_KEY]
             self.task_id = update.task_id or self.task_id
             self._final_state = "input_required"
-            call_id = self.parked.get("request_id") or uuid.uuid4().hex
+            self.call_id = self.pending.get("request_id") or uuid.uuid4().hex
             return self._close_text() + [
-                ToolCallStartEvent(tool_call_id=call_id, tool_call_name=PERMISSION_TOOL),
-                ToolCallArgsEvent(tool_call_id=call_id, delta=json.dumps(self.parked)),
-                ToolCallEndEvent(tool_call_id=call_id),
+                ToolCallStartEvent(tool_call_id=self.call_id, tool_call_name=PERMISSION_TOOL),
+                ToolCallArgsEvent(tool_call_id=self.call_id, delta=json.dumps(self.pending)),
+                ToolCallEndEvent(tool_call_id=self.call_id),
             ]
         if status.state == TaskState.TASK_STATE_WORKING:
             if not text:
@@ -152,6 +165,8 @@ class Turn:
 
     kind: Literal["message", "resume"]
     text: str
+    tool_call_id: str = ""
+    request_id: str = ""
 
 
 def incoming_turn(run_input: RunAgentInput) -> Turn:
@@ -159,7 +174,12 @@ def incoming_turn(run_input: RunAgentInput) -> Turn:
         raise ValueError("run carried no messages")
     last = run_input.messages[-1]
     if isinstance(last, ToolMessage):
-        return Turn(kind="resume", text=_decision(last.content))
+        return Turn(
+            kind="resume",
+            text=_decision(last.content),
+            tool_call_id=last.tool_call_id,
+            request_id=_request_id(run_input.messages, last.tool_call_id),
+        )
     if isinstance(last, UserMessage) and isinstance(last.content, str) and last.content:
         return Turn(kind="message", text=last.content)
     raise ValueError(f"cannot act on a trailing {type(last).__name__}")
@@ -176,3 +196,77 @@ def _decision(content: str | None) -> str:
     if parsed not in ("allow", "deny"):
         raise ValueError(f"tool result carried no decision: {content!r}")
     return parsed
+
+
+def _request_id(messages, tool_call_id: str) -> str:
+    """The request_id inside the answered call's args, or '' if unfindable."""
+    for message in reversed(messages):
+        for call in getattr(message, "tool_calls", None) or []:
+            if call.id == tool_call_id and call.function.name == PERMISSION_TOOL:
+                try:
+                    args = json.loads(call.function.arguments)
+                except json.JSONDecodeError:
+                    return ""
+                return str(args.get("request_id") or "")
+    return ""
+
+
+_MESSAGE_ADAPTER: TypeAdapter[Message] = TypeAdapter(Message)
+
+
+def fold_messages(rows: list[tuple[int, str, str]]) -> list[Message]:
+    """The reading of the event log: replayable AG-UI messages, stable ids.
+
+    'in' rows pass through as the messages they already are; 'out' rows
+    re-assemble what streamed (deltas concatenate, tool calls pair with
+    their args, a RUN_ERROR becomes a visible assistant marker). Lifecycle
+    events shape the fold but produce no messages.
+    """
+    messages: list[Message] = []
+    open_text: dict[str, AssistantMessage] = {}
+    open_calls: dict[str, ToolCall] = {}
+    for seq, direction, payload in rows:
+        if direction == "in":
+            messages.append(_MESSAGE_ADAPTER.validate_json(payload))
+            continue
+        event = json.loads(payload)
+        kind = event.get("type")
+        if kind == "TEXT_MESSAGE_START":
+            text = AssistantMessage(
+                id=event["messageId"], role="assistant", content=""
+            )
+            open_text[event["messageId"]] = text
+            messages.append(text)
+        elif kind == "TEXT_MESSAGE_CONTENT":
+            text = open_text.get(event["messageId"])
+            if text is not None:
+                text.content = (text.content or "") + event["delta"]
+        elif kind == "TEXT_MESSAGE_END":
+            open_text.pop(event["messageId"], None)
+        elif kind == "TOOL_CALL_START":
+            call = ToolCall(
+                id=event["toolCallId"],
+                type="function",
+                function=FunctionCall(name=event["toolCallName"], arguments=""),
+            )
+            open_calls[event["toolCallId"]] = call
+            messages.append(
+                AssistantMessage(
+                    id=f"call-{event['toolCallId']}",
+                    role="assistant",
+                    tool_calls=[call],
+                )
+            )
+        elif kind == "TOOL_CALL_ARGS":
+            call = open_calls.get(event["toolCallId"])
+            if call is not None:
+                call.function.arguments += event["delta"]
+        elif kind == "RUN_ERROR":
+            messages.append(
+                AssistantMessage(
+                    id=f"error-{seq}",
+                    role="assistant",
+                    content=f"run failed: {event.get('message', '')}",
+                )
+            )
+    return messages

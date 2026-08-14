@@ -6,6 +6,11 @@ never on database totals.
 
 from __future__ import annotations
 
+import json
+import uuid
+
+from test_agui import run, user_says
+
 
 async def test_create_mission_and_find_it_listed(service_url, http):
     created = (
@@ -81,3 +86,27 @@ async def test_open_chat_without_agent_400s(service_url, http, mission):
         f"{service_url}api/missions/{mission['id']}/chats", json={}
     )
     assert response.status_code == 400
+
+
+async def test_pending_is_null_for_a_quiet_chat(mission, open_chat, http, service_url):
+    chat = await open_chat(mission["id"], "billing-api")
+    response = await http.get(f"{service_url}api/chats/{chat['context_id']}/pending")
+    assert response.status_code == 200
+    assert response.json() == {"pending": None}
+
+
+async def test_pending_carries_the_permission_payload(
+    mission, open_chat, http, service_url
+):
+    chat = await open_chat(mission["id"], "billing-api")
+    await run(http, service_url, chat["context_id"], user_says("please run the tests"))
+    response = await http.get(f"{service_url}api/chats/{chat['context_id']}/pending")
+    payload = response.json()["pending"]
+    assert payload["tool"] == "Bash"
+    assert payload["request_id"]
+
+
+async def test_pending_for_an_unknown_chat_is_404(http, service_url):
+    response = await http.get(f"{service_url}api/chats/deadbeef/pending")
+    assert response.status_code == 404
+    assert "error" in response.json()

@@ -38,13 +38,10 @@ async def http():
         yield client
 
 
-@pytest.fixture(scope="session")
-def service_url(rig_url, tmp_path_factory) -> str:
-    """orch-serve as a real subprocess, cataloged against the session rig."""
-    workdir = tmp_path_factory.mktemp("orchestrator")
+def spawn_service(workdir: Path, rig_url: str, port: int):
+    """Boot orch-serve as a subprocess; returns (proc, url) once it answers."""
     catalog = workdir / "catalog.yaml"
     catalog.write_text(f"provider: index\nurl: {rig_url}\n")
-    port = free_port()
     url = f"http://127.0.0.1:{port}/"
     proc = subprocess.Popen(
         [
@@ -64,19 +61,34 @@ def service_url(rig_url, tmp_path_factory) -> str:
             raise RuntimeError(f"orch-serve exited early:\n{proc.stdout.read()}")
         try:
             if httpx.get(f"{url}api/missions", timeout=2.0).status_code == 200:
-                break
+                return proc, url
         except httpx.HTTPError:
             pass
         time.sleep(0.1)
-    else:
-        proc.terminate()
-        raise TimeoutError("orch-serve did not come up in time")
+    proc.terminate()
+    raise TimeoutError("orch-serve did not come up in time")
+
+
+@pytest.fixture(scope="session")
+def service_workdir(tmp_path_factory) -> Path:
+    return tmp_path_factory.mktemp("orchestrator")
+
+
+@pytest.fixture(scope="session")
+def service_url(rig_url, service_workdir) -> str:
+    """orch-serve as a real subprocess, cataloged against the session rig."""
+    proc, url = spawn_service(service_workdir, rig_url, free_port())
     yield url
     proc.terminate()
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+@pytest.fixture
+def service_db(service_workdir) -> Path:
+    return service_workdir / "orchestrator.db"
 
 
 @pytest_asyncio.fixture
@@ -96,3 +108,33 @@ def open_chat(service_url, http):
         return response.json()
 
     return _open
+
+
+class RestartableService:
+    """A service that can be restarted, using a fresh port each boot but the same db."""
+
+    def __init__(self, workdir: Path, rig_url: str):
+        self.workdir = workdir
+        self.rig_url = rig_url
+        self.proc, self.url = spawn_service(workdir, rig_url, free_port())
+
+    def restart(self) -> None:
+        """Stop and restart the service on a fresh port."""
+        self.stop()
+        self.proc, self.url = spawn_service(self.workdir, self.rig_url, free_port())
+
+    def stop(self) -> None:
+        """Terminate the service process."""
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+@pytest.fixture
+def restartable_service(rig_url, tmp_path) -> RestartableService:
+    """A service that can be restarted for testing restart survival."""
+    service = RestartableService(tmp_path, rig_url)
+    yield service
+    service.stop()

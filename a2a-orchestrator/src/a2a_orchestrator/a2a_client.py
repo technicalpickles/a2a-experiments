@@ -2,10 +2,9 @@
 
 Grown from a2a-rig's harness client (a2a_rig/events.py): same create_client +
 send_message loop, reshaped as a long-lived registry. The service — not the
-browser — owns which task a chat has parked; agui.py records it here after
-the translator has seen the whole turn. In-memory by design (spec: Domain
-model / Identifiers): a service restart loses the park, same deferral class
-as reload replay, both resolved by the future event log.
+browser — owns which task a chat has pending; agui.py records it here after
+the translator has seen the whole turn. The store owns pending state, not
+this class: a service restart finds it right where the last turn left it.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from a2a.client import create_client
 from a2a.client.client import ClientConfig
 from a2a.types import Message, Part, Role, SendMessageRequest, StreamResponse
 
+from a2a_orchestrator.store import Pending, Store
 from a2a_orchestrator.translate import Turn
 
 
@@ -27,19 +27,23 @@ class ChatLike(Protocol):
 
 
 class Conversations:
-    def __init__(self, http: httpx.AsyncClient):
+    def __init__(self, http: httpx.AsyncClient, store: Store):
         self._http = http
+        self._store = store
         self._clients: dict[str, object] = {}
-        self._parked: dict[str, str] = {}
 
-    def park(self, context_id: str, task_id: str) -> None:
-        self._parked[context_id] = task_id
+    def set_pending(
+        self, context_id: str, task_id: str, call_id: str, payload: str
+    ) -> None:
+        self._store.set_pending(context_id, task_id, call_id, payload)
 
-    def clear(self, context_id: str) -> None:
-        self._parked.pop(context_id, None)
+    def clear_pending(self, context_id: str) -> None:
+        self._store.clear_pending(context_id)
+        # A wedged connection must not outlive the exchange that wedged it.
+        self._clients.pop(context_id, None)
 
-    def parked_task(self, context_id: str) -> str | None:
-        return self._parked.get(context_id)
+    def pending_of(self, context_id: str) -> Pending | None:
+        return self._store.pending_of(context_id)
 
     async def _client(self, chat: ChatLike):
         if chat.context_id not in self._clients:
@@ -54,9 +58,16 @@ class Conversations:
     ) -> AsyncIterator[StreamResponse]:
         task_id = ""
         if turn.kind == "resume":
-            task_id = self._parked.get(chat.context_id, "")
-            if not task_id:
-                raise LookupError(f"no parked task for context {chat.context_id!r}")
+            pending = self._store.pending_of(chat.context_id)
+            if pending is None:
+                raise LookupError(f"no pending task for context {chat.context_id!r}")
+            claimed = turn.request_id or turn.tool_call_id
+            if claimed != pending.call_id:
+                raise ValueError(
+                    f"resume answers {claimed!r} but the pending approval is "
+                    f"{pending.call_id!r}"
+                )
+            task_id = pending.task_id
         client = await self._client(chat)
         message = Message(
             message_id=uuid.uuid4().hex,
