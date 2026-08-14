@@ -38,9 +38,13 @@ export function PhosphorUserMessage({ message }: CopilotChatUserMessageProps) {
 export function PhosphorAssistantMessage({
   message,
   messages,
-  isRunning,
 }: CopilotChatAssistantMessageProps) {
-  const isLast = messages?.at(-1)?.id === message.id
+  // No inline caret here: CopilotChatMessageView already renders the cursor
+  // slot (PhosphorCursor) whenever a run is streaming, and the memoized
+  // assistant-message comparator never compares `messages`, so a message
+  // that stops being last never re-renders — an inline caret computed from
+  // `isLast` would stick forever once superseded. The cursor slot owns the
+  // caret exclusively.
   return (
     <div className="flex gap-2 text-[13px] leading-[1.7]">
       <span className="select-none text-primary">cc&gt;</span>
@@ -51,7 +55,6 @@ export function PhosphorAssistantMessage({
         <div className="phosphor-tool-calls">
           <CopilotChatToolCallsView message={message} messages={messages} />
         </div>
-        {isRunning && isLast ? <span className="caret" aria-hidden /> : null}
       </div>
     </div>
   )
@@ -73,7 +76,7 @@ export function PhosphorComposer({ onSubmitMessage, isRunning }: CopilotChatInpu
   }
   if (approvalPending) {
     return (
-      <div className="flex items-center gap-2 rounded-sm border border-dashed border-border bg-[#0a0b0a] px-3.5 py-3 text-[12px] text-muted-foreground">
+      <div className="pointer-events-auto flex items-center gap-2 rounded-sm border border-dashed border-border bg-[#0a0b0a] px-3.5 py-3 text-[12px] text-muted-foreground">
         answer the permission request to continue
       </div>
     )
@@ -81,7 +84,11 @@ export function PhosphorComposer({ onSubmitMessage, isRunning }: CopilotChatInpu
   return (
     <form
       onSubmit={submit}
-      className="group flex items-center gap-2 rounded-sm border border-border bg-card px-3.5 py-3 transition-colors duration-[120ms] focus-within:border-primary"
+      // CopilotChatView renders the input slot inside an overlay it marks
+      // pointer-events-none; the stock input re-enables on its own wrapper.
+      // Without this, clicks on the field and the send button are dead —
+      // only Tab-focus reaches them.
+      className="group pointer-events-auto flex items-center gap-2 rounded-sm border border-border bg-card px-3.5 py-3 transition-colors duration-[120ms] focus-within:border-primary"
     >
       <span className="select-none text-muted-foreground group-focus-within:text-primary">&gt;</span>
       <input

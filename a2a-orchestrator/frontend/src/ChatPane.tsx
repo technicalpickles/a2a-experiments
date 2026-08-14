@@ -127,6 +127,19 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
     () => ({ repoName: chat.agent, approvalPending: false }),
     [chat.agent],
   )
+  // The messageView slot props object is a literal in JSX; without this
+  // memo, ChatPane re-renders (e.g. every setRunError) hand CopilotChat a
+  // new object identity every time, defeating its slot memoization. The
+  // referenced components are module-scope stable, so this has no deps.
+  const messageView = useMemo(
+    () => ({
+      assistantMessage: PhosphorAssistantMessage as unknown as typeof CopilotChatAssistantMessage,
+      userMessage: PhosphorUserMessage as unknown as typeof CopilotChatUserMessage,
+      cursor: PhosphorCursor,
+      className: 'gap-[18px]',
+    }),
+    [],
+  )
   return (
     <section className="flex h-full min-h-0 flex-col">
       {runError && <p className="error">run failed: {runError}</p>}
@@ -151,11 +164,7 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
               // branch of that union even though it satisfies the call
               // signature CopilotChat actually invokes. Cast rather than
               // reshape our components to fake those statics.
-              messageView={{
-                assistantMessage: PhosphorAssistantMessage as unknown as typeof CopilotChatAssistantMessage,
-                userMessage: PhosphorUserMessage as unknown as typeof CopilotChatUserMessage,
-                cursor: PhosphorCursor,
-              }}
+              messageView={messageView}
               input={PhosphorComposer as unknown as typeof CopilotChatInput}
               onError={(event) => {
                 // CopilotChatProps["onError"] is typed as a union with the plain
