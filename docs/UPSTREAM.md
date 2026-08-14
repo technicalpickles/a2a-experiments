@@ -820,8 +820,8 @@ the error state, so an app-level banner can be cleared the moment a new run begi
 forcing a full remount.
 
 **Cite:** `a2a-orchestrator/frontend/src/ChatPane.tsx:139-143` (the comment describing the gap
-directly), `.superpowers/sdd/2026-08-14-cockpit-phosphor/error-surfaces-report.md` (the
-remount-based workaround this gap forced).
+directly); the remount-based workaround this gap forced landed in the `error-surfaces` slice,
+commits `472cd6f`/`40ca1f3`.
 
 ---
 

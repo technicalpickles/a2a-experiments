@@ -1884,10 +1884,10 @@ separate orchestrator-driven pass against the mocks, not part of this doc slice.
 
 **Tech choices.** Tailwind v4 (`@tailwindcss/vite`) plus `class-variance-authority` for the
 button/card variants — Josh's call, and it matched the brief's own stated preference over hand-
-rolled CSS modules. `cmdk`/Radix were pulled in as dependencies but ultimately skipped for the
-repo picker: the design's trigger-as-input combobox (the filter text lives *in* the trigger,
-not behind a separate panel) doesn't fit cmdk's panel-input pattern, so the listbox is hand-
-rolled — filter, keyboard nav, match count, all local `useState`.
+rolled CSS modules. `cmdk`/Radix were considered for the repo picker and skipped at planning
+time, never installed: the design's trigger-as-input combobox (the filter text lives *in* the
+trigger, not behind a separate panel) doesn't fit cmdk's panel-input pattern, so the listbox is
+hand-rolled — filter, keyboard nav, match count, all local `useState`.
 
 **Theming CopilotKit.** The chat pane reskins through two mechanisms. First, a token override:
 CopilotKit v2 ships its own shadcn-style custom properties scoped to `[data-copilotkit]`
