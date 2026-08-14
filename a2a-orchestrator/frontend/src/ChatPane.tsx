@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CopilotChat,
   CopilotKitProvider,
@@ -150,6 +150,7 @@ export function ChatPane({
   const [approvalPending, setApprovalPending] = useState(false)
   // Tracks whether a pending approval was re-armed via runTool.
   const [rearmed, setRearmed] = useState(false)
+  const handleArmed = useCallback(() => setRearmed(true), [])
   const chatUiValue = useMemo(
     () => ({ repoName: chat.agent, approvalPending }),
     [chat.agent, approvalPending],
@@ -194,7 +195,7 @@ export function ChatPane({
           contextId={chat.context_id}
           agent={agents[chat.context_id]}
           onError={setRunError}
-          onArmed={() => setRearmed(true)}
+          onArmed={handleArmed}
         />
         <ChatUiContext.Provider value={chatUiValue}>
           <div className="mx-auto flex min-h-0 w-full max-w-[660px] flex-1 flex-col px-5">
