@@ -53,9 +53,28 @@ function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }
   )
 }
 
-function ErrorStrip({ error }: { error: string }) {
+function ErrorStrip({
+  error,
+  onDismiss,
+}: {
+  error: string
+  onDismiss?: () => void
+}) {
   if (!error) return null
-  return <p className="px-5 py-2 text-[12px] text-destructive">{error}</p>
+  return (
+    <div className="flex items-center gap-2.5 border-b border-[oklch(0.40_0.14_340)] bg-[oklch(0.20_0.07_340)] px-4 py-2 text-[12px]">
+      <span className="font-bold text-[oklch(0.80_0.20_340)]">ERR</span>
+      <span className="min-w-0 flex-1 truncate">{error}</span>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          className="shrink-0 cursor-pointer border-none bg-transparent text-[11px] text-[oklch(0.80_0.20_340)] hover:text-white"
+        >
+          ✕ dismiss
+        </button>
+      )}
+    </div>
+  )
 }
 
 export default function App() {
@@ -65,6 +84,7 @@ export default function App() {
   const [chat, setChat] = useState<ChatRef | null>(null)
   const [repoChoice, setRepoChoice] = useState('')
   const [error, setError] = useState('')
+  const [chatNonce, setChatNonce] = useState(0)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [theme, toggleTheme] = useTheme()
 
@@ -117,7 +137,7 @@ export default function App() {
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </header>
 
-        <ErrorStrip error={error} />
+        <ErrorStrip error={error} onDismiss={() => setError('')} />
 
         <div className="flex items-baseline gap-3 px-5 pt-4 pb-2">
           <span className="text-[10.5px] tracking-[.16em] text-muted-foreground">MISSIONS/</span>
@@ -290,11 +310,15 @@ export default function App() {
           </div>
         </header>
 
-        <ErrorStrip error={error} />
+        <ErrorStrip error={error} onDismiss={() => setError('')} />
 
         {chat ? (
           <div className="min-h-0 flex-1">
-            <ChatPane chat={chat} key={chat.context_id} />
+            <ChatPane
+              chat={chat}
+              key={`${chat.context_id}:${chatNonce}`}
+              onRemount={() => setChatNonce((n) => n + 1)}
+            />
           </div>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 text-center">

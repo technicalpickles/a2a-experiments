@@ -64,10 +64,12 @@ function PendingRearm({
   contextId,
   agent,
   onError,
+  onArmed,
 }: {
   contextId: string
   agent: ReplayHttpAgent
   onError: (message: string) => void
+  onArmed?: () => void
 }) {
   const { copilotkit } = useCopilotKit()
   const armed = useRef(false)
@@ -100,6 +102,7 @@ function PendingRearm({
           parameters: pending,
           followUp: 'generate',
         })
+        onArmed?.()
       } catch (err) {
         if (!cancelled) {
           const reason = err instanceof Error ? err.message : String(err)
@@ -110,11 +113,17 @@ function PendingRearm({
     return () => {
       cancelled = true
     }
-  }, [contextId, agent, copilotkit, onError])
+  }, [contextId, agent, copilotkit, onError, onArmed])
   return null
 }
 
-export function ChatPane({ chat }: { chat: ChatRef }) {
+export function ChatPane({
+  chat,
+  onRemount,
+}: {
+  chat: ChatRef
+  onRemount?: () => void
+}) {
   // One HttpAgent per chat, registered under the chat's own key: registry
   // agents are singletons per key, so distinct chats must never share one
   // (same-key-different-threadId clobbers the shared instance's thread).
@@ -139,6 +148,8 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
   // value stable across renders so consumers don't re-render on every
   // ChatPane render.
   const [approvalPending, setApprovalPending] = useState(false)
+  // Tracks whether a pending approval was re-armed via runTool.
+  const [rearmed, setRearmed] = useState(false)
   const chatUiValue = useMemo(
     () => ({ repoName: chat.agent, approvalPending }),
     [chat.agent, approvalPending],
@@ -158,13 +169,32 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
   )
   return (
     <section className="flex h-full min-h-0 flex-col">
-      {runError && <p className="error">run failed: {runError}</p>}
+      {runError && (
+        <div className="flex items-center gap-2.5 border-b border-[oklch(0.40_0.14_340)] bg-[oklch(0.20_0.07_340)] px-4 py-2 text-[12px]">
+          <span className="font-bold text-[oklch(0.80_0.20_340)]">ERR</span>
+          <span className="min-w-0 flex-1 truncate">run failed: {runError}</span>
+          {onRemount && (
+            <button
+              onClick={onRemount}
+              className="shrink-0 cursor-pointer border-none bg-transparent text-[11px] text-[oklch(0.80_0.20_340)] hover:text-white"
+            >
+              ↻ remount
+            </button>
+          )}
+        </div>
+      )}
+      {rearmed && (
+        <p className="m-0 px-4 py-1 text-[11px] text-muted-foreground">
+          {'// reload detected · pending approval re-armed via runTool()'}
+        </p>
+      )}
       <CopilotKitProvider agents__unsafe_dev_only={agents}>
         <PermissionTool repo={chat.agent} onPendingChange={setApprovalPending} />
         <PendingRearm
           contextId={chat.context_id}
           agent={agents[chat.context_id]}
           onError={setRunError}
+          onArmed={() => setRearmed(true)}
         />
         <ChatUiContext.Provider value={chatUiValue}>
           <div className="mx-auto flex min-h-0 w-full max-w-[660px] flex-1 flex-col px-5">
