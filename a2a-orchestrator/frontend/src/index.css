@@ -173,6 +173,18 @@
   }
 }
 
+/* Tool-call lines inside an assistant message: a quiet strip, not a card.
+   CopilotChatToolCallsView's own DOM isn't inspectable from here (no dev
+   server in this environment), so chat-ui.tsx wraps it in .phosphor-tool-calls
+   and this targets that wrapper directly rather than guessing at CopilotKit's
+   internal class/data-attribute names. */
+.phosphor-tool-calls:not(:empty) {
+  border-left: 2px solid oklch(0.4 0.06 150);
+  background: var(--card);
+  font-size: 11.5px;
+  padding: 4px 10px;
+}
+
 /* Streaming caret: a block, not a bar, and un-eased on purpose. */
 .caret {
   display: inline-block;

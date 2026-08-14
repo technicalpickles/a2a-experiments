@@ -4,10 +4,20 @@ import {
   CopilotKitProvider,
   useCopilotKit,
   useHumanInTheLoop,
+  type CopilotChatAssistantMessage,
+  type CopilotChatInput,
+  type CopilotChatUserMessage,
 } from '@copilotkit/react-core/v2'
 import { fetchPending, type ChatRef } from './api'
 import { ApprovalCard, type Permission } from './ApprovalCard'
 import { ReplayHttpAgent } from './agent'
+import {
+  ChatUiContext,
+  PhosphorAssistantMessage,
+  PhosphorComposer,
+  PhosphorCursor,
+  PhosphorUserMessage,
+} from './chat-ui'
 
 // request_permission is the one wire contract the cockpit mints (spec: Domain
 // model): args are a2acode's permission payload verbatim, the result is
@@ -110,9 +120,15 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
   // hook clears it on the next run (see report), so the banner is sticky
   // until the chat is remounted.
   const [runError, setRunError] = useState('')
+  // approvalPending is hardcoded false until approval-card wires real state;
+  // useMemo keeps the context value stable across renders so consumers don't
+  // re-render on every ChatPane render.
+  const chatUiValue = useMemo(
+    () => ({ repoName: chat.agent, approvalPending: false }),
+    [chat.agent],
+  )
   return (
-    <section>
-      <h2>{chat.agent}</h2>
+    <section className="flex h-full min-h-0 flex-col">
       {runError && <p className="error">run failed: {runError}</p>}
       <CopilotKitProvider agents__unsafe_dev_only={agents}>
         <PermissionTool />
@@ -121,17 +137,36 @@ export function ChatPane({ chat }: { chat: ChatRef }) {
           agent={agents[chat.context_id]}
           onError={setRunError}
         />
-        <CopilotChat
-          agentId={chat.context_id}
-          threadId={chat.context_id}
-          onError={(event) => {
-            // CopilotChatProps["onError"] is typed as a union with the plain
-            // DOM `onError` (HTMLAttributes<HTMLDivElement> carries one too,
-            // for <img>/<video> children) — narrow to CopilotKit's own shape
-            // before reading `.error`.
-            if ('error' in event) setRunError(String(event.error?.message ?? event.error))
-          }}
-        />
+        <ChatUiContext.Provider value={chatUiValue}>
+          <div className="mx-auto flex min-h-0 w-full max-w-[660px] flex-1 flex-col px-5">
+            <CopilotChat
+              agentId={chat.context_id}
+              threadId={chat.context_id}
+              className="h-full"
+              // The messageView/input slot types are `SlotValue<typeof
+              // CopilotChatXxx>`, and CopilotChatAssistantMessage/UserMessage/
+              // Input are `declare function` + merged `declare namespace`
+              // pairs (statics like `.MarkdownRenderer` attached) — so a
+              // plain replacement component structurally fails the exact-type
+              // branch of that union even though it satisfies the call
+              // signature CopilotChat actually invokes. Cast rather than
+              // reshape our components to fake those statics.
+              messageView={{
+                assistantMessage: PhosphorAssistantMessage as unknown as typeof CopilotChatAssistantMessage,
+                userMessage: PhosphorUserMessage as unknown as typeof CopilotChatUserMessage,
+                cursor: PhosphorCursor,
+              }}
+              input={PhosphorComposer as unknown as typeof CopilotChatInput}
+              onError={(event) => {
+                // CopilotChatProps["onError"] is typed as a union with the plain
+                // DOM `onError` (HTMLAttributes<HTMLDivElement> carries one too,
+                // for <img>/<video> children) — narrow to CopilotKit's own shape
+                // before reading `.error`.
+                if ('error' in event) setRunError(String(event.error?.message ?? event.error))
+              }}
+            />
+          </div>
+        </ChatUiContext.Provider>
       </CopilotKitProvider>
     </section>
   )
