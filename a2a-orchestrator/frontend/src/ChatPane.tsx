@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import {
   CopilotChat,
   CopilotKitProvider,
@@ -138,6 +138,21 @@ function PendingRearm({
   return null
 }
 
+// Rendered in place of the message list while a chat has no messages yet.
+// `isRunning` covers ReplayHttpAgent's connect() fetch (it's implemented as
+// a run against /agui/connect), so this only shows once that's settled and
+// come back genuinely empty — no flash while history is still loading.
+function EmptyChatState({ repoName }: { repoName: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 py-16 text-center">
+      <span className="text-[12px] tracking-[.14em] text-muted-foreground">NEW CHAT</span>
+      <p className="text-muted-foreground text-[12.5px] leading-[1.7] dark:text-[oklch(0.76_0.02_150)]">
+        Say hello to {repoName || 'the agent'} to get started.
+      </p>
+    </div>
+  )
+}
+
 export function ChatPane({
   chat,
   onRemount,
@@ -192,8 +207,27 @@ export function ChatPane({
       userMessage: PhosphorUserMessage as unknown as typeof CopilotChatUserMessage,
       cursor: PhosphorCursor,
       className: 'gap-[18px]',
+      children: ({
+        isRunning,
+        messages,
+        messageElements,
+        interruptElement,
+      }: {
+        isRunning: boolean
+        messages: unknown[]
+        messageElements: ReactElement[]
+        interruptElement: ReactElement | null
+      }) =>
+        messages.length === 0 && !isRunning ? (
+          <EmptyChatState repoName={chat.agent} />
+        ) : (
+          <>
+            {messageElements}
+            {interruptElement}
+          </>
+        ),
     }),
-    [],
+    [chat.agent],
   )
   return (
     <section className="flex h-full min-h-0 flex-col">
@@ -219,7 +253,7 @@ export function ChatPane({
           onArmed={handleArmed}
         />
         <ChatUiContext.Provider value={chatUiValue}>
-          <div className="mx-auto flex min-h-0 w-full max-w-[660px] flex-1 flex-col px-5">
+          <div className="mx-auto flex min-h-0 w-full max-w-[880px] flex-1 flex-col px-5">
             <CopilotChat
               agentId={chat.context_id}
               threadId={chat.context_id}

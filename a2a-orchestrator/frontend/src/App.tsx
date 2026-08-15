@@ -59,7 +59,6 @@ export default function App() {
   const [repos, setRepos] = useState<RepoEntry[]>([])
   const [missionId, setMissionId] = useState<string | null>(null)
   const [chat, setChat] = useState<ChatRef | null>(null)
-  const [repoChoice, setRepoChoice] = useState('')
   const [error, setError] = useState('')
   const [chatNonce, setChatNonce] = useState(0)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -93,10 +92,19 @@ export default function App() {
     }
   }
 
-  const startChat = async () => {
-    if (!missionId || !repoChoice) return
+  // Selecting a repo for a mission either reuses the chat already open with
+  // it (so re-picking the same repo can't mint a second thread) or opens a
+  // fresh one.
+  const selectRepoForChat = async (repoName: string) => {
+    if (!missionId) return
+    const current = missions.find((m) => m.id === missionId)
+    const existing = current?.chats.find((c) => c.agent === repoName)
+    if (existing) {
+      setChat(existing)
+      return
+    }
     try {
-      const opened = await openChat(missionId, repoChoice)
+      const opened = await openChat(missionId, repoName)
       await refresh()
       setChat(opened)
     } catch (e) {
@@ -230,7 +238,7 @@ export default function App() {
                   </span>
                   <span className="min-w-0 flex-1 truncate">{m.title}</span>
                 </button>
-                {selected && m.chats.length > 0 && (
+                {selected && (
                   <ul className="flex flex-col gap-0.5 pl-[30px]">
                     {m.chats.map((c) => (
                       <li key={c.context_id}>
@@ -246,6 +254,26 @@ export default function App() {
                         </button>
                       </li>
                     ))}
+                    <li>
+                      <RepoPicker
+                        repos={repos}
+                        value=""
+                        onChange={(name) => {
+                          selectRepoForChat(name)
+                          setDrawerOpen(false)
+                        }}
+                        trigger={({ onClick, onKeyDown }) => (
+                          <button
+                            type="button"
+                            onClick={onClick}
+                            onKeyDown={onKeyDown}
+                            className="flex w-full items-center rounded-sm py-1 text-left text-[12px] text-muted-foreground hover:bg-accent hover:text-primary focus-visible:-outline-offset-1 max-md:min-h-11"
+                          >
+                            + new chat
+                          </button>
+                        )}
+                      />
+                    </li>
                   </ul>
                 )}
               </li>
@@ -266,33 +294,20 @@ export default function App() {
       </aside>
 
       <section className="flex min-w-0 flex-col overflow-hidden">
-        <header className="flex h-[52px] shrink-0 items-center justify-between gap-3 border-b border-divider px-5">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setDrawerOpen(true)}
-              className="flex h-11 w-11 flex-col items-center justify-center gap-[5px] md:hidden"
-              aria-label="Open menu"
-            >
-              <div className="h-[1.5px] w-4 bg-foreground" />
-              <div className="h-[1.5px] w-4 bg-foreground" />
-            </button>
-            <span className="text-[12.5px]">
-              <span className="text-muted-foreground">cockpit /</span>{' '}
-              <span className="font-bold">{mission.title}</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <RepoPicker repos={repos} value={repoChoice} onChange={setRepoChoice} />
-            <Button
-              variant={repoChoice ? 'primary' : 'secondary'}
-              size="md"
-              disabled={!repoChoice}
-              onClick={startChat}
-            >
-              OPEN CHAT
-            </Button>
-          </div>
+        <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-divider px-5">
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="flex h-11 w-11 flex-col items-center justify-center gap-[5px] md:hidden"
+            aria-label="Open menu"
+          >
+            <div className="h-[1.5px] w-4 bg-foreground" />
+            <div className="h-[1.5px] w-4 bg-foreground" />
+          </button>
+          <span className="min-w-0 truncate text-[12.5px]">
+            <span className="text-muted-foreground">cockpit /</span>{' '}
+            <span className="font-bold">{mission.title}</span>
+          </span>
         </header>
 
         <ErrorStrip message={error} action={{ label: '✕ dismiss', onClick: () => setError('') }} />
@@ -311,9 +326,9 @@ export default function App() {
               NO CHAT OPEN
             </span>
             <p className="text-muted-foreground text-[12.5px] leading-[1.7] dark:text-[oklch(0.74_0.02_150)]">
-              Pick a repo and open a chat — the agent card is fetched
+              Pick a repo from the sidebar to start chatting — the agent card
               <br />
-              when the chat is created, not before.
+              is fetched when the chat is created, not before.
             </p>
           </div>
         )}

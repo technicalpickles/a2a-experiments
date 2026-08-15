@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { RepoEntry } from './api'
 import { cn } from './lib/utils'
 
@@ -6,10 +6,18 @@ export function RepoPicker({
   repos,
   value,
   onChange,
+  trigger,
 }: {
   repos: RepoEntry[]
   value: string
   onChange: (name: string) => void
+  // Custom closed-state trigger (e.g. a sidebar list row instead of the
+  // header pill). RepoPicker still owns open/close and keyboard wiring —
+  // the caller only supplies how the trigger looks.
+  trigger?: (props: {
+    onClick: () => void
+    onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => void
+  }) => ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -93,6 +101,8 @@ export function RepoPicker({
           />
           <span aria-hidden>▴</span>
         </div>
+      ) : trigger ? (
+        trigger({ onClick: () => openPicker(), onKeyDown: onTriggerKeyDown })
       ) : (
         <button
           type="button"
@@ -109,7 +119,7 @@ export function RepoPicker({
       {open && (
         <div
           role="listbox"
-          className="absolute right-0 top-full z-50 w-[320px] border border-ring border-t-0 bg-popover [box-shadow:0_24px_48px_-20px_rgba(0,0,0,.85)]"
+          className="w-full border border-ring border-t-0 bg-popover [box-shadow:0_24px_48px_-20px_rgba(0,0,0,.85)]"
         >
           {matches.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">no repos match</div>
