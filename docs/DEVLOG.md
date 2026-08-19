@@ -2309,3 +2309,132 @@ idempotent by having a distinct reconnect path, not by being re-run.
    a bound on what any approval policy may auto-allow there, independent of the agent.
 
 None of this is decided; it is the input to a `real-agents` spec that does not exist yet.
+
+## 2026-08-19 — bb's remote story, and the one place A2A fights it
+
+Third question against the same clone: how does bb start sessions on another machine? It
+does, and it separates three things our model currently conflates.
+
+### Three axes, deliberately independent
+
+- **Remote execution** — enrolled *machines* running a host daemon. This is "run this
+  thread on another computer."
+- **Remote access** — reaching the bb UI and API from another *device*, via the bb connect
+  relay or a Tailscale Serve URL. A browser device is "a control surface for one bb server.
+  It can view projects, send prompts, and manage threads, but it does not execute them."
+- **Remote server targeting** — pointing a client at a different server: the desktop app's
+  Server menu, or the CLI's `BB_SERVER_URL`.
+
+`docs/multiple-devices.md` states the separation as a rule: "Browser access and execution
+remain independent: opening bb on a laptop does not enroll that laptop, and enrolling it as
+a machine does not expose the bb UI."
+
+**There is no cloud execution.** `docs/VISION.md` lists it among the directions not to close
+off; nothing ships it. Every execution machine is a computer the user owns and enrolled.
+
+### Starting a remote session is one flag
+
+    bb thread spawn --project <id> --machine <id-or-name> \
+      --new-environment worktree --prompt "..."
+
+Same command as local. The server routes over the active daemon WebSocket as host RPC
+commands — `environment.provision`, then `thread.start`, then `turn.submit` — and the
+command set does not vary by machine. `environments.hostId` is `notNull`, so a workspace
+belongs to a machine permanently, while `project_sources` (unique on `(projectId, hostId)`)
+lets one project map to paths on several machines.
+
+### Everything dials out, and that is the load-bearing choice
+
+The **daemon dials the server**; the execution machine needs no inbound port, no public
+address, no firewall hole. For browser access the **server dials the relay** — "The server
+owns the tunnel and reconnects after restart." bb connect is a Cloudflare Workers relay:
+one WebSocket carrying a binary frame protocol (`open-http`, `body-chunk`, `body-end`,
+`resp-head`, `open-ws`, `ws-data`, `close-stream`; u32 stream ids; 1 MiB chunk cap), where
+**streams are opened only by the relay side — the tunnel client never allocates stream
+ids**, and heartbeats are *text* messages specifically so the Durable Object can
+auto-respond without waking. Reconnect is capped exponential backoff (1s → 30s) with the
+attempt counter reset only after a connection that stayed up past a stability threshold.
+
+The escape hatch exists and the docs are blunt about its price:
+`--server-bind-host 0.0.0.0` "restores direct IPv4 network access. The public API is
+unauthenticated and permits command execution and file reads."
+
+### Enrollment: a short-lived code redeemed for a long-lived key
+
+`bb machine join-code` mints a short-lived pairing code; the generated one-line installer
+enrolls a daemon, and `/enroll` returns `{hostId, hostKey}`. Redemption failures are a named
+set rather than a status code — `already_used | expired | invalid_code | machine_limit |
+network | invalid_response`.
+
+Two operational details worth stealing:
+
+- **Per-server isolation.** Each joined server gets its own daemon instance, data directory
+  (`~/.bb-machines/<server-host>`), local API port atomically reserved under
+  `~/.bb-machines/host-daemon-ports/`, and its own launchd/systemd service. One machine
+  serves several bb servers at once, and joining "never touches a full local bb install's
+  `~/.bb`."
+- **The daemon installs the exact package the server exposes**, from `/install/bb-app.tgz`,
+  not from npm — because "Version strings cannot distinguish unpublished builds," so a
+  pre-release server and its remote machines stay aligned.
+
+### Version skew is first-class and self-healing
+
+`HOST_DAEMON_PROTOCOL_VERSION` is at **135**, and the constant's file is a running changelog
+of why each bump happened. The bump is not bookkeeping — it is the update *trigger*: "The
+version mismatch is what triggers the enrolled daemon's automatic update instead of an
+`invalid-message` reconnect loop." AGENTS.md makes it a hard rule with the reasoning
+attached: always bump when anything crossing the wire can change, because "A shared
+TypeScript build passing is not evidence of wire compatibility: enrolled machines can still
+be running an older daemon." The daemon then downloads the server's artifact, updates its
+private install, and exits for the service manager to restart it; failures back off 5s → 5min
+with the backoff persisted; a daemon never downgrades. `hosts.lastRejectedProtocolVersion`
+records the rejection so the UI can explain a stranded machine.
+
+### Reconnect is a reconciliation handshake — and this is what makes "no process table" work
+
+On `/session/open` the daemon sends `hostId`, `instanceId` (this process incarnation),
+`protocolVersion`, and crucially **`activeThreads` and `loadedEnvironments`**: here is what
+I actually have running. The server answers with `sessionId`, `heartbeatIntervalMs`,
+`leaseTimeoutMs`, **`retiredEnvironmentIds`** (drop these), and generation-numbered
+`watchSet` / `connectShares` / `pluginHostGenerations`.
+
+So both sides state their view on every connect and the server corrects, rather than either
+side tracking the other continuously. The generation counters let the daemon detect a stale
+cached set without diffing it. Then the lease is renewed by heartbeat, and an expired lease
+is how the server concludes a machine is gone. That handshake is the missing half of the
+previous entry's finding: you can decline to persist process state precisely because
+reconnect re-derives it.
+
+Alongside it, `hosts.maxPermissionMode` is a per-machine authority ceiling no thread may
+exceed — machine-level policy independent of any thread's own permission mode.
+
+### The tension worth naming: A2A assumes the agent is reachable
+
+Our spawn-provider sketch has the orchestrator launch `a2acode serve` on a port it then
+connects to. That is fine on localhost and dead the moment the agent is not co-located —
+and A2A makes bb's inversion awkward rather than easy, because in A2A the agent **is** an
+HTTP server: the card advertises a URL, the client dials it. bb's model is the reverse, and
+it is the reason bb needs nothing open on an execution machine.
+
+Squaring them means either a relay (an A2A-speaking endpoint the orchestrator hosts, behind
+which remote agents register by dialing out) or accepting inbound reachability and pushing
+the problem to the network (Tailscale, as bb also offers). The index provider — `GET /`
+returning `{repos: [{name, description, card_url}]}` — is already the seam where a
+registration-by-dial-out story would live, since consumers discover repos through the index
+rather than the filesystem. Nothing here needs deciding now; it needs to be in the
+`real-agents` spec rather than discovered when the first agent lives somewhere else.
+
+### What to carry over
+
+1. **Keep access, execution, and server-targeting separate**, and say so in the design the
+   way bb's doc does — our "one process many repos / one process per repo are
+   interchangeable" claim is the same kind of statement and gets its force from being
+   explicit.
+2. **Reconcile on reconnect** — ask "what do you have running?", answer "these are retired"
+   — instead of tracking remote state continuously.
+3. **Health is a lease with a server-dictated heartbeat interval**, not a ping.
+4. **Put a version number on the wire and let mismatch drive the fix.** DESIGN-v3 already
+   names a pinning-and-refresh tripwire for a2acode's event vocabulary, but there is no
+   version on the wire between orchestrator and repo agent. The agent card is where one
+   would live.
+5. **Name the failure modes of pairing as a closed set**, not HTTP statuses.
