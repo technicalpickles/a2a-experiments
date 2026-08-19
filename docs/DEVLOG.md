@@ -1933,3 +1933,229 @@ HITL `render()` losing the resolved decision once a call reaches `status === 'co
 (the approval card's post-reload receipt has to fall back to a neutral "ANSWERED" rather than
 the true "ALLOWED"/"DENIED"), and `RUN_ERROR` having no supported hook to clear a sticky error
 banner short of remounting the whole chat pane.
+
+## 2026-08-19 — reading bb: what the cockpit can steal, and the one integration worth building
+
+Cloned [`get-bb/bb`](https://github.com/get-bb/bb) (MIT, TypeScript pnpm monorepo — 34
+packages, 19 plugins, an Electron shell) and read it against the orchestrator. This is a
+survey entry, not a spec: nothing here changes DESIGN-v3 yet, and the two decisions it
+argues for (the AG-UI grammar checker, and an A2A provider bridge as the sequel to M4)
+want their own specs before anything is built.
+
+**What bb is.** An agentic IDE with the same shape as the cockpit's target: one place to
+drive many coding agents across many repos and worktrees. Runtime is a **server** (SQLite
+is the source of truth, HTTP + WebSocket out, itself stateless), a **host daemon** per
+enrolled machine (provisions workspaces, runs provider processes, posts events back), a
+**web app**, and a **CLI** that is explicitly first-class rather than a sidecar. Agent
+providers (Claude Code, Codex, Pi, ACP) sit behind one bridge protocol and ship as plugin
+artifacts.
+
+**The honest framing: bb is the product this prototype is a research version of, and it
+made the opposite protocol bet.** There is no A2A, no AG-UI, and no agent-card anything
+in the tree — bb owns its wire (`@bb/server-contract`, `@bb/host-daemon-contract`,
+`@bb/provider-bridge-protocol`) and treats every agent as a process behind a bridge it
+defines. We bet the wire is the ecosystem's and the producer is real. So bb's protocol
+*content* is not reusable here. Its protocol *discipline* is, and that turns out to be the
+valuable half: bb has been through the incidents at exactly the seams we are building, and
+wrote the lessons down with issue numbers attached.
+
+### The seam lessons (`docs/provider-bridge-protocol.md`)
+
+That doc opens by saying what it is for: the schemas are the source of truth for message
+shape, and this document adds "what schemas cannot express — the **event grammar**: which
+sequences are legal, who mints which identifiers, and which orderings each side may rely
+on." `translate.py` has a table of shape mappings and no grammar. That is the gap.
+
+- **Grammar enforced twice, one implementation.** `packages/provider-bridge-protocol/src/thread-event-grammar.ts`
+  is a cheap streaming state machine (four bounded per-thread id sets, five named rules:
+  `item/opens-before-delta`, `item/settles-once`, `turn/starts-once`, `turn/settles-once`,
+  `turn/known`). The conformance kit runs it statically over a recorded log; the host also
+  runs it **live at event intake**, because a third-party bridge nobody ran the kit against
+  still reaches persistence. A violating event does not advance the state, so the caller
+  can drop it and keep going. The AG-UI side has the identical rule set —
+  `TEXT_MESSAGE_START` before `CONTENT`, no `CONTENT` after `END`, one `RUN_FINISHED`,
+  `TOOL_CALL_START` before `ARGS` — and none of it is currently checked. A ~150-line
+  `AguiGrammar` observer, asserted over the translator's output in every rig test, kills
+  the whole class of bug where `translate.py` emits a well-typed but illegal stream. The
+  `events` table we shipped on 2026-08-13 is already the recorded log a static checker
+  would read.
+- **Every item's first event is `item/started`** — an SDK that streams delta-first makes
+  the bridge *synthesize* the opening event, because delta-only openings forced a
+  backfill special case in their timeline "which broke." Our equivalent is an artifact
+  chunk arriving before a text frame is open; `RunTranslator` handles it, but as
+  implementation detail rather than a named rule with a test.
+- **Every accepted turn reaches exactly one terminal state**, including a turn that does
+  no work (a `/clear` still produces started+completed). `finish()` already refuses to
+  launder a stream that ended without a terminal state — same lesson, independently
+  learned. What we do *not* have is bb's other half: a **turn-start watchdog**, so an
+  accepted turn that goes quiet becomes a visible event instead of a hung thread.
+- **Correlation rides its own event, never inference.** `turn/started` deliberately carries
+  no request id; the bridge must emit `turn/input/accepted` carrying the originating
+  request's `clientRequestId`, "so the runtime never guesses which user message opened a
+  turn." Our inbound direction *is* that guess — `incoming_turn` decides what is new by
+  reading the tail of `RunAgentInput.messages`. A client-minted turn id echoed back is the
+  cheap version of the fix.
+- **Id ownership as a table with an owner column.** Three families: `threadId` (bb mints,
+  provider echoes verbatim), `providerThreadId` (the provider's own session handle, never
+  used to scope bb events), turn and item ids (**the bridge**, never the provider). The
+  rule is structural — ids that reach persistence are always minted by bb-authored code,
+  and a bridge wrapping a provider that mints its own keeps a private translation map.
+  Two construction rules are conformance-enforced: turn ids embed per-process entropy so
+  they cannot collide across restarts or resumes, and item ids are scoped by turn id
+  because a per-session counter is a latent cross-resume collision. We have the good
+  version of the ownership story (`context_id` playing all three roles, `runId` per turn,
+  `taskId` never reaching the browser) but it lives in prose in a spec, and the collision
+  rules bite the moment replay and reload coexist.
+- **Session replacement is never silent** (their #1268). Whenever a bridge tears down and
+  rebuilds a live provider session it first emits settlement events for in-flight work,
+  then `session/replaced` with a human-readable reason and `contextLost` when provider-side
+  context did not survive. a2acode's Claude session can die under a `contextId` and the
+  cockpit has no vocabulary for "your context is gone" — that is a `CUSTOM` event and a
+  banner, and it is the failure most likely to confuse a real user silently.
+- **Lenient at the edges, strict at the core.** Wire schemas tolerate unknown fields; one
+  malformed entry degrades to one missing entry (a bad model in `model/list` drops that
+  model, not the listing); but a payload entering persistence is strictly validated. We
+  already do the edge half — unknown A2A shapes pass through as `CUSTOM` rather than being
+  dropped. The core half belongs on the event log.
+- **Capability facts are reported by the code that implements them, "so they cannot drift
+  from behavior,"** and a handshake fact may only *narrow* what the declaration
+  advertises, never widen it. The narrowing rule is the useful import: the A2A card is the
+  declaration, and a repo agent that turns out not to support what its card claims should
+  narrow, not surprise.
+
+### Generated-from-code as anti-drift
+
+`docs/lifecycle-diagrams.md` is a generated file whose header carries the regeneration
+command, rendered from the `THREAD_LIFECYCLE` / `ENVIRONMENT_LIFECYCLE` transition tables
+that the CAS single-writers actually consume. The diagram cannot drift from behavior
+because the behavior is the diagram's source. Our A2A↔AG-UI mapping table lives in the
+2026-08-12 spec as prose — the exact drift shape this repo exists to prevent. Making
+`translate.py`'s mapping a data table and generating the doc table from it in a test is a
+small change with the same property.
+
+### The worktree contract, free of charge
+
+`real-agents` and its spawn provider are unbuilt, and `docs/worktrees.md` is most of the
+design already written down and operated:
+
+- **`.worktreeinclude`** (gitignore syntax, committed at the repo root) lists the untracked
+  local files a fresh worktree needs — `.env`, certs. Copied after creation and *before*
+  the setup script, so the script can read them. The contract is spelled out: copies not
+  symlinks, never replaces anything the worktree already tracks (tracked file wins, skip
+  reported), source symlinks skipped rather than followed, and a pattern matching nothing
+  or a failed copy is reported in the provisioning transcript without failing provisioning.
+- **`.bb-env-setup.sh`** runs once at creation, inside the worktree, **with stdin closed**,
+  stdout/stderr streamed to a provisioning transcript visible in the app; non-zero exit,
+  signal, or a 15-minute timeout fails provisioning and the thread never starts.
+- **Cleanup stops every process whose working directory is inside the worktree** before
+  removal — the agent's provider process, its background jobs, *and the user's own shell if
+  they `cd`'d in there* — SIGTERM then SIGKILL after a grace period. That is exactly the
+  lesson a spawn provider learns the expensive way.
+- **Environment is not thread.** Multiple threads share one environment; the environment is
+  reaped when the last unarchived thread using it goes away. bb's answer to worktree
+  concurrency is refcount-by-consumer plus a written ownership protocol, not a lease — see
+  the WORKERS.md note below. Our open question ("one writer, N readers, mechanism TBD") has
+  a shipped alternative to weigh against it.
+- The **environment lifecycle machine** (`provisioning → ready → retiring → destroying →
+  destroyed`, with error edges and a `matchingDestroyAttempt` predicate so a stale destroy
+  result cannot settle a newer attempt) is a ready-made model for our process registry.
+
+### Manager threads were deleted, and that is evidence about our domain model
+
+`bb manager` now hard-errors: *"Manager threads were replaced by parent threads. Use
+`bb thread spawn --parent-thread <id>` to delegate work, `bb thread list --parent-thread
+<id>` to list child threads."* The threads table has no manager kind — just
+`parent_thread_id` and an index on it. (`docs/system-overview.md` still describes threads
+as standard-or-manager; it is stale on this point.)
+
+The orchestrator spec lists as a risk that the domain model is three layers deep on day
+one, with the instruction to collapse a layer that fails to earn its keep. bb ran that
+experiment: it built the special-cased coordinator entity, and replaced it with a plain
+parent link plus a generic delegation primitive. The reading for `orchestrator-live` is to
+avoid orchestrator-specific machinery — the orchestrator agent is a chat that can open
+child chats, and the parent pointer is the whole abstraction.
+
+The delegation surface that replaced it is worth copying nearly verbatim: `thread spawn`
+(`--prompt`, `--project`, `--new-environment worktree`, `--base-branch`,
+`--parent-thread` / `--parent-self`, `--visibility hidden`, `--machine`) plus **`thread
+wait <id>`** with a `--status` *or* `--event <type>` target and a timeout. `send_to_repo`
+is the spawn half; the wait half — a first-class "block until this reaches a state or
+emits an event" primitive — is missing from our tool design and is what makes fan-out
+scriptable. `--visibility hidden` is the repo-pane-clutter answer we will want too.
+
+### The workflows plugin has already solved `recorder` → `replay`
+
+`plugins/workflows` runs JavaScript orchestration in a QuickJS sandbox with no clock, no
+randomness, no filesystem, no network — determinism enforced by the sandbox rather than by
+convention — while delegating reasoning to ordinary threads. Its durability model is the
+one our recording milestones need:
+
+- Runs and ordered agent calls persist independently. On restart the source re-evaluates
+  from the beginning and successful calls **replay by a SHA-256 key until the first
+  divergence**; the first edited, new, failed, cancelled, incomplete, or null-result call
+  and its entire suffix run live. Explicit resume uses the same longest-unchanged-prefix
+  rule against a chosen prior run. Parallel calls get identities in deterministic
+  invocation order, so concurrency does not break replay.
+- Transient provider failures retry twice with bounded backoff before reaching the script,
+  with retryability decided by an explicit SDK marker or conservative overload/rate-limit/
+  5xx/network signatures — and **the retry budget is persisted on the call so a restart
+  cannot reset it**.
+- Completion delivery back to the origin thread is explicitly at-least-once, carrying a
+  stable run-id marker so duplicates are recognizable, with status exposing
+  `pending | delivered | abandoned` and a missing origin permanently recording `abandoned`
+  so it cannot block retention. Our dispatch-results-return-to-the-orchestrator path has
+  the same delivery problem and no answer yet.
+
+Two agent-ergonomics rules from the same README that our orchestrator tools should adopt
+outright: `status` is *deliberately bounded* — state, phase, counts, and a small result,
+omitting source, arguments, and history "so polling cannot be truncated into invalid
+JSON" — and `history` is paginated JSONL with the documented usage being to **redirect it
+to a file** so large prompts and results never enter the agent's transcript.
+
+### Two artifacts worth copying as shapes
+
+- **`plugins/tasks/WORKERS.md`** — the brief bb hands agents building a plugin in a
+  *shared* worktree. Path-ownership fences ("touch ONLY the paths your prompt assigns",
+  never run repo-wide formatters, never touch the lockfile), git rules (commit only owned
+  paths, never push, never switch branches, never merge), an explicit gate list that must
+  be green before reporting done, a known-gotchas section naming current repo bugs and
+  their workarounds, and a fixed report format (outcome · files changed · commands run +
+  pass/fail · screenshots · deviations/blockers · commit hash). A mission is supposed to
+  hand each repo agent something; this is what that something looks like when it is real.
+- **`qa/missed-invariants.md`** — one entry per bug that shipped: the hotfix commit, the
+  invariant that was missed, *why the manual QA runbook missed it*, the automated guard
+  added, and the manual guard added. That is a better shape than a DEVLOG paragraph for
+  the same information, and it is the internal-facing sibling of UPSTREAM.md's
+  "a lead, not a verified claim" discipline.
+
+### How we could actually leverage bb
+
+- **A. An A2A provider bridge plugin for bb** — the one integration that pays both
+  directions. bb's provider surface is a plugin export
+  (`experimental_defineProviderBridge`), bundled self-contained, delivered to daemons
+  content-addressed and digest-verified, compiled against the published
+  `@get-bb/plugin-sdk/provider-bridge`. `examples/plugins/echo-provider` is a complete
+  worked third-party provider in ~400 lines across three files, and it ships its
+  conformance test with the instruction to do the same for every bridge. A bridge speaking
+  A2A upstream makes *any* A2A agent — a2acode, and the playback rig — a first-class bb
+  provider. The work is the same translation problem as `translate.py`, third instance;
+  the payoff is that the rig gains a second, independent consumer (proof it is not tuned
+  to our one client) and bb's conformance kit becomes a free test suite for it. This is
+  the natural sequel to M4, not a replacement for it.
+- **B. An A2A server in front of bb** — map `message/stream` onto `thread spawn`/send and
+  bb's WebSocket onto SSE, making bb a repo agent the cockpit talks to, with worktrees,
+  hosts, and permissions arriving for free. Rejected for now: it makes bb the engine and
+  leaves the cockpit a thin skin over a better UI, which is not what this project is for.
+- **C. Mine it, do not couple to it** — take the grammar discipline into `translate.py`
+  and the worktree contract into `real-agents`. Free, immediate, no dependency.
+- **D. Upstream to bb** — they have no A2A or AG-UI at all, the plugin surface is public
+  and explicitly third-party-friendly, and the repo is MIT. If A gets built it is a
+  plausible contribution.
+
+**Recommendation: C now, A after M4.** C costs nothing and improves the seam we already
+own; A is the integration that earns its keep in both directions. B is a trap.
+
+**And the boundary.** bb's scale — a host daemon, an Electron shell, a plugin marketplace,
+34 packages — is precisely what DESIGN-v3 deliberately is not building. Read its feature
+list as a menu of what daily-driver use eventually demands, not as a backlog. The
+transferable content is the invariants, not the inventory.
