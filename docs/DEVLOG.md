@@ -2438,3 +2438,167 @@ rather than the filesystem. Nothing here needs deciding now; it needs to be in t
    version on the wire between orchestrator and repo agent. The agent card is where one
    would live.
 5. **Name the failure modes of pairing as a closed set**, not HTTP statuses.
+
+## 2026-08-19 — addendum: the start-an-agent flows, side by side
+
+Diagrams for the three entries above, so the comparison is legible without re-reading bb.
+bb generates its own lifecycle diagrams as mermaid in `docs/`; same form here.
+
+### A. bb, agent on this machine
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User / bb CLI
+    participant S as Server — SQLite is truth
+    participant D as Host daemon — this machine
+    participant B as Bridge process — plugin artifact
+    participant P as Provider CLI — claude / codex / acp
+
+    U->>S: POST /api/v1/threads<br/>spawn --project P --new-environment worktree
+    Note over S: resolve execution options<br/>thread override → turn → project default<br/>build bridgeLaunch: pluginId, digest, capabilities<br/>insert thread "starting" + environment "provisioning"
+    S->>D: environment.provision
+    D->>D: git worktree add<br/>copy .worktreeinclude<br/>run .bb-env-setup.sh
+    D-->>S: transcript steps, streamed
+    D-->>S: discovered workspace properties
+    Note over S: provision.succeeded → environment "ready"
+    S->>D: thread.start — bridgeLaunch, acpLaunchSpec, executionOptions
+    Note over D: processKey = digest + fingerprint of capabilities<br/>+ #acp:fingerprint of launch spec<br/>reuse a live process, else spawn
+    D->>B: verify artifact digest, spawn, initialize handshake
+    B->>P: spawn provider child
+    B-->>D: thread/identity — providerThreadId, sessionRestorable
+    S->>D: turn.submit
+    B-->>D: turn/input/accepted → turn/started → item/* → turn/completed
+    D-->>S: event batches, grammar-checked at intake
+    S-->>U: WebSocket notifications; events persisted
+```
+
+The two load-bearing moves: **`bridgeLaunch` rides the command** so the daemon holds no
+provider config of its own, and **`processKey` is a hash of the launch inputs** so reuse is
+exact and a changed input silently gets a fresh process.
+
+### B. bb, agent on another machine
+
+Identical from `environment.provision` onward. What changes is everything that happened
+before, and the direction the connection was opened.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User / bb CLI
+    participant S as Server
+    participant R as Host daemon — remote machine
+
+    Note over U,R: Phase 0 — enrollment, once
+    U->>S: bb machine join-code
+    S-->>U: short-lived code + one-line installer
+    U->>R: run installer on the remote machine
+    R->>S: POST /enroll — dials OUT
+    S-->>R: hostId, hostKey
+
+    Note over S,R: Phase 1 — session, on every connect and reconnect
+    R->>S: WS /session/open<br/>hostId, instanceId, protocolVersion,<br/>activeThreads, loadedEnvironments
+    S-->>R: sessionId, heartbeatIntervalMs, leaseTimeoutMs,<br/>retiredEnvironmentIds, watchSet
+    loop while the lease holds
+        R->>S: heartbeat → renews leaseExpiresAt
+    end
+
+    Note over U,R: Phase 2 — starting the agent, identical to local
+    U->>S: spawn --machine mac-mini --new-environment worktree
+    S->>R: environment.provision → thread.start → turn.submit
+    R-->>S: transcript, thread/identity, turn and item events
+```
+
+**Every server→daemon arrow rides the WebSocket the daemon opened.** The remote machine
+needs no inbound port, no public address, no firewall hole. Phase 1 is also the
+reconciliation handshake — the daemon says what it still has running, the server says what
+is retired — which is what lets bb persist no process state at all.
+
+### C. Ours, today
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Browser — CopilotKit
+    participant O as orch-serve<br/>agui.py · translate.py · a2a_client.py
+    participant C as catalog.yaml — index provider
+    participant A as Repo agent — rig-serve or a2acode
+
+    Note over A: already running — started by hand, in another terminal
+    U->>O: POST /agui/run — threadId = contextId, messages
+    O->>C: resolve agent name → card_url
+    O->>A: A2A message/stream, JSON-RPC over SSE
+    A-->>O: task → statusUpdate working → artifactUpdate → statusUpdate completed
+    O-->>U: SSE of AG-UI events — RUN_STARTED, TEXT_MESSAGE_*, TOOL_CALL_*, RUN_FINISHED
+```
+
+There is no start step. The agent's existence is a precondition, and `catalog.yaml` maps a
+name straight to a `card_url` — repo identity, checkout, and running endpoint collapsed
+into one row.
+
+### D. Ours, with the sketched spawn provider — unbuilt
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Browser
+    participant O as orch-serve
+    participant SP as Spawn provider
+    participant W as Worktree
+    participant A as a2acode serve
+
+    U->>O: open chat — mission M, repo R
+    O->>SP: endpoint_for mission M, repo R
+    alt no live process for this key
+        SP->>W: create worktree for M and R
+        SP->>A: launch a2acode serve --cwd worktree --port N
+        SP->>A: poll agent card until healthy
+    end
+    SP-->>O: card_url
+    O->>A: A2A message/stream
+    A-->>O: task / status / artifact events
+    O-->>U: AG-UI events
+```
+
+Compared to A: the provision step is there, but the process key, the launch config riding
+the request, and the reconcile-on-reconnect handshake are all absent — and the spec's
+sketch persists pid/port/health, which bb persists none of.
+
+### E. Ours, remote repo agent — the shape that does not work
+
+```mermaid
+flowchart LR
+    subgraph laptop["Your laptop"]
+        O["orch-serve"]
+    end
+    subgraph remote["Remote machine / container"]
+        A["a2acode serve<br/>listening on :9210"]
+    end
+    O -- "A2A client dials the card URL" --> NAT{{"NAT · firewall<br/>no inbound route"}}
+    NAT -. blocked .-> A
+```
+
+A2A makes the agent an HTTP server: the card advertises a URL and the client dials it. bb's
+model is the exact inverse, which is why bb needs nothing open on an execution machine. The
+two ways to square it:
+
+```mermaid
+flowchart TB
+    subgraph opt1["Option 1 — reverse registration, bb's shape"]
+        direction LR
+        A1["a2acode + agent shim<br/>remote machine"] -- "dials out, holds a lease" --> REG["orch-serve registry<br/>= today's GET / index"]
+        REG -- "A2A calls ride back<br/>down that connection" --> A1
+    end
+    subgraph opt2["Option 2 — make it reachable, network layer"]
+        direction LR
+        O2["orch-serve"] -- "A2A dials normally" --> TS["Tailscale / VPN address"]
+        TS --> A2["a2acode serve<br/>remote machine"]
+    end
+```
+
+Option 1 keeps A2A's vocabulary while inverting who dials, and the index at `GET /` is
+already the seam it would live at — consumers discover repos through the index rather than
+the filesystem, so a registration story slots in without changing what a consumer sees.
+Option 2 keeps A2A unmodified and pushes the problem to the network, which is also what bb
+offers as its non-relay route. Neither needs deciding now; both belong in the `real-agents`
+spec rather than being discovered when the first agent lives somewhere else.
