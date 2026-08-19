@@ -2603,3 +2603,132 @@ the filesystem, so a registration story slots in without changing what a consume
 Option 2 keeps A2A unmodified and pushes the problem to the network, which is also what bb
 offers as its non-relay route. Neither needs deciding now; both belong in the `real-agents`
 spec rather than being discovered when the first agent lives somewhere else.
+
+## 2026-08-19 — the inverse dial-out, researched: A2A has no answer in-spec and four outside it
+
+Josh's question after the diagrams: does A2A have anything for the reverse-dial shape, proposals
+included, and does ACP? Answer: **nothing in either spec, a sanctioned extension point in A2A,
+and more prior art than the "Option 1" box implied.** That box is now a survey of four
+implementations rather than an idea. Sources are linked; everything below was read from the
+primary artifact except where marked, per this repo's lead-not-a-claim habit.
+
+### A2A itself: consumer dials producer, and the async escape hatch runs the wrong way
+
+The v1.0 spec has three protocol bindings (`JSONRPC`, `GRPC`, `HTTP+JSON`) and the card
+advertises a URL the client dials. Nothing inverts that.
+
+Worth naming because it looks like a fix and isn't: **push notification configs make our
+problem worse, not better.** The client registers a webhook URL and *the agent* POSTs task
+updates to it — so the async path requires the **client** to be publicly reachable. For a
+cockpit on a laptop talking to an agent in a container, both directions now need an inbound
+route instead of one.
+
+What the spec does give is a legal extension point, stated normatively:
+
+> "Custom protocol bindings **SHOULD** be identified by a URI. Using a URI as the identifier
+> provides globally unique identification across all implementers."
+>
+> "Custom protocol bindings **MUST** define equivalent error code mappings that preserve the
+> semantic meaning of each A2A error type."
+
+So a dial-out binding is *conformant A2A*, not a fork. That reframes the whole question: we
+would not be working around the protocol, we would be using the axis it left open.
+
+### Three efforts inside the A2A project
+
+- **[#1151 "Spec Update for Transport Support"](https://github.com/a2aproject/A2A/issues/1151)**
+  — **closed**, filed by muscariello, assigned with darrelmiller. Introduces
+  `PluggableTransport` as a spec-level concept and names the non-HTTP set: **JSON-RPC over
+  stdio, over WebSocket, and over AGNTCY SLIM**, with "HTTP headers must be preserved across
+  transports" and a requirement that SDKs implement the PluggableTransport interface and
+  "facilitate community-contributed transports." The linked PRs (#1205, #1175) turned out to be
+  tooling rather than this spec text — #1205 is a protoc/JSON-Schema generation refactor — so
+  **treat "this landed in the spec" as unverified**; what is certain is the project's stated
+  direction.
+- **[#1074 "[Feat]: Stdio transport"](https://github.com/a2aproject/A2A/issues/1074)** —
+  **open**, no maintainer reply. LSP-style framing (`Content-Length` header, `\r\n\r\n`,
+  JSON-RPC body) and, notably, it solves card discovery for an agent with no endpoint by
+  **encoding the subprocess launch command in the AgentCard's `url` field**, citing how Cursor
+  and Zed launch local MCP servers. This is the bb answer expressed as an A2A binding: no
+  network, so whoever spawns you owns reachability.
+- **[a2a-rs #14](https://github.com/a2aproject/a2a-rs/issues/14)** — **open**, unassigned, in
+  the Rust SDK: add a WebSocket binding for "a long-lived bidirectional option." It does *not*
+  specify which side dials, which is exactly the detail that would matter to us.
+
+### Two shipped implementations of the inverse dial, one pinned to our SDK version
+
+- **[`agntcy/slim-a2a-python`](https://github.com/agntcy/slim-a2a-python)** — a SLIMRPC
+  transport for the a2a-python SDK, Apache-2.0, and it requires **`a2a-sdk` 1.1.x — our exact
+  pin (1.1.2)**. Agents *dial out* to a SLIM node rather than listening, and are addressed by a
+  `namespace/group/name` triple (`Name("agntcy", "demo", "echo_agent")`) instead of a URL.
+  Server side is an `SRPCHandler` behind the usual `DefaultRequestHandler`; client side is a
+  `MultiAgentClientFactory` with a `slimrpc_channel_factory`. Supports A2A v1.0 with a v0.3
+  compat layer. SLIM itself is AGNTCY (Linux Foundation), gRPC over HTTP/2/3 with MLS
+  end-to-end encryption, and is the same transport #1151 named. **This is our "Option 1",
+  already built, by the people A2A pointed at.**
+- **[`zeroasterisk/a2a-relay`](https://github.com/zeroasterisk/a2a-relay)** — the minimal
+  version, third-party, Apache-2.0, self-described **Beta ("API may change. Production use at
+  your own risk")**. Shape: `Client ──HTTP──► Relay ◄──WebSocket── Agent (no public URL)`. The
+  agent dials `/agent`, sends `{"type": "auth"}` carrying a JWT, tenant id, agent id **and its
+  agent card**, then answers `a2a.request` frames with `a2a.response`. The relay serves
+  `/.well-known/agent.json` for discovery. That registration frame — card-on-connect — is
+  precisely what our `GET /` index would need.
+
+### And one broker binding with an actual written spec
+
+**A2A over MQTT** ([spec draft](https://github.com/emqx/mqtt-for-ai/tree/main/a2a-over-mqtt),
+EMQX): agents publish a **retained** Agent Card to a discovery topic
+(`$a2a/v1/discovery/{org_id}/{unit_id}/{agent_id}`), clients subscribe to discover and publish
+to request topics, replies come back on reply topics, using MQTT v5 Response Topic +
+Correlation Data with QoS 1. Broker-neutral. It surfaced in the A2A repo as
+[discussion #876](https://github.com/a2aproject/A2A/discussions/876), where collaborator
+`mikeas1` sketched three shapes (MQTT→agent bridge, agent→MQTT via MCP tools, hybrid) and
+EMQX's `zmstone` announced the draft — so there is maintainer engagement, but no adoption.
+Same NAT-traversal property for free: everyone dials the broker.
+
+### ACP: the question is moot by default, and its remote RFD doesn't answer it either
+
+ACP (Zed's Agent Client Protocol — the one a2acode's `--backend acp` and bb's `provider-acp`
+both mean) is JSON-RPC 2.0 over **stdio, with the client spawning the agent as a subprocess**.
+There is no reachability question: the transport is inherited pipes. Remoting it is somebody
+else's problem — ssh, or a supervisor next to the agent.
+
+Its remote story is a real, current document —
+[`docs/rfds/streamable-http-websocket-transport.mdx`](https://github.com/zed-industries/agent-client-protocol/blob/main/docs/rfds/streamable-http-websocket-transport.mdx),
+**Active as of 2026-07-02**, reference implementation in Goose, SDK support in progress. It
+proposes Streamable HTTP (POST up, long-lived SSE GET down, HTTP/2 for multiplexing) plus a
+WebSocket upgrade on the same `/acp` endpoint, and "Clients that support remote ACP over HTTP
+MUST support both." But the direction is unchanged — **client dials server, and the RFD does
+not address agents behind NAT.**
+
+Two things in it are worth stealing whatever transport we land on, because a reverse-registered
+agent needs both anyway:
+
+- **Connection identity and session identity are separate** — `Acp-Connection-Id` vs
+  `Acp-Session-Id` — and "a single connection may host multiple sessions, each with its own
+  `sessionId` and its own session-scoped GET stream." That is the multiplexing story for one
+  dial-out connection carrying several chats, which our `contextId`-per-chat model will need.
+- **Sessions survive disconnect and resume via `session/load` on a new connection.** Our
+  equivalent question — what happens to a parked `input-required` task when the tunnel drops —
+  has no answer today.
+
+### What this changes for us
+
+1. **Option 1 is no longer speculative.** Evaluate `slim-a2a-python` before writing anything:
+   it targets our SDK pin exactly, and the "agent has a name, not a URL" addressing is a
+   cleaner fit for the catalog than a rewritten `card_url` ever was. The open question is
+   operational weight — a SLIM node to run, MLS identities to manage — against a laptop rig.
+2. **The cheap seam is `ClientTransport`.** a2a-python's
+   `src/a2a/client/transports/base.py` defines `class ClientTransport(ABC)` with
+   `send_message`, `send_message_streaming`, `get_task`, `list_tasks`, `cancel_task`,
+   `subscribe`, `close`, plus push-config methods — alongside `jsonrpc.py`, `rest.py`,
+   `grpc.py`, and a `tenant_decorator.py`. A custom transport is a real, public extension
+   point, and roughly eight methods of work.
+3. **The bb-shaped answer needs no protocol work at all**, and #1074 is the reminder: keep
+   a2acode a plain localhost HTTP server and put our own agent-host process next to it, dialing
+   home. A2A stays untouched; the reachability problem moves to a component we own. Given how
+   much of `real-agents` is already "a supervisor that provisions worktrees and launches
+   a2acode," that supervisor dialing out is close to free.
+4. **Don't build a bespoke relay first.** If we do reach for the relay shape, `a2a-relay`'s
+   card-on-connect registration frame is the design to copy, not reinvent — but it is Beta and
+   third-party, so read it as a reference rather than a dependency.
