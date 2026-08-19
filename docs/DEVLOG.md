@@ -2450,27 +2450,27 @@ bb generates its own lifecycle diagrams as mermaid in `docs/`; same form here.
 sequenceDiagram
     autonumber
     actor U as User / bb CLI
-    participant S as Server — SQLite is truth
-    participant D as Host daemon — this machine
-    participant B as Bridge process — plugin artifact
-    participant P as Provider CLI — claude / codex / acp
+    participant S as Server
+    participant D as Host daemon
+    participant B as Bridge
+    participant P as Provider CLI
 
-    U->>S: POST /api/v1/threads<br/>spawn --project P --new-environment worktree
-    Note over S: resolve execution options<br/>thread override → turn → project default<br/>build bridgeLaunch: pluginId, digest, capabilities<br/>insert thread "starting" + environment "provisioning"
+    U->>S: POST /api/v1/threads<br/>spawn --new-environment worktree
+    Note over S: resolve execution options<br/>build bridgeLaunch: pluginId, digest, capabilities<br/>insert thread "starting", environment "provisioning"
     S->>D: environment.provision
     D->>D: git worktree add<br/>copy .worktreeinclude<br/>run .bb-env-setup.sh
     D-->>S: transcript steps, streamed
     D-->>S: discovered workspace properties
-    Note over S: provision.succeeded → environment "ready"
-    S->>D: thread.start — bridgeLaunch, acpLaunchSpec, executionOptions
-    Note over D: processKey = digest + fingerprint of capabilities<br/>+ #acp:fingerprint of launch spec<br/>reuse a live process, else spawn
-    D->>B: verify artifact digest, spawn, initialize handshake
+    Note over S: provision.succeeded → ready
+    S->>D: thread.start + bridgeLaunch + executionOptions
+    Note over D: processKey = digest + fingerprint of capabilities<br/>reuse a live process, else spawn
+    D->>B: verify digest, spawn, initialize
     B->>P: spawn provider child
-    B-->>D: thread/identity — providerThreadId, sessionRestorable
+    B-->>D: thread/identity: providerThreadId, sessionRestorable
     S->>D: turn.submit
     B-->>D: turn/input/accepted → turn/started → item/* → turn/completed
     D-->>S: event batches, grammar-checked at intake
-    S-->>U: WebSocket notifications; events persisted
+    S-->>U: WebSocket notifications, events persisted
 ```
 
 The two load-bearing moves: **`bridgeLaunch` rides the command** so the daemon holds no
@@ -2487,7 +2487,7 @@ sequenceDiagram
     autonumber
     actor U as User / bb CLI
     participant S as Server
-    participant R as Host daemon — remote machine
+    participant R as Host daemon · remote
 
     Note over U,R: Phase 0 — enrollment, once
     U->>S: bb machine join-code
@@ -2497,14 +2497,14 @@ sequenceDiagram
     S-->>R: hostId, hostKey
 
     Note over S,R: Phase 1 — session, on every connect and reconnect
-    R->>S: WS /session/open<br/>hostId, instanceId, protocolVersion,<br/>activeThreads, loadedEnvironments
-    S-->>R: sessionId, heartbeatIntervalMs, leaseTimeoutMs,<br/>retiredEnvironmentIds, watchSet
+    R->>S: WS /session/open<br/>hostId, instanceId, protocolVersion<br/>activeThreads, loadedEnvironments
+    S-->>R: sessionId, heartbeat + lease terms<br/>retiredEnvironmentIds, watchSet
     loop while the lease holds
         R->>S: heartbeat → renews leaseExpiresAt
     end
 
     Note over U,R: Phase 2 — starting the agent, identical to local
-    U->>S: spawn --machine mac-mini --new-environment worktree
+    U->>S: spawn --machine mac-mini
     S->>R: environment.provision → thread.start → turn.submit
     R-->>S: transcript, thread/identity, turn and item events
 ```
@@ -2519,17 +2519,17 @@ is retired — which is what lets bb persist no process state at all.
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as Browser — CopilotKit
-    participant O as orch-serve<br/>agui.py · translate.py · a2a_client.py
-    participant C as catalog.yaml — index provider
-    participant A as Repo agent — rig-serve or a2acode
+    actor U as Browser
+    participant O as orch-serve
+    participant C as catalog.yaml
+    participant A as Repo agent
 
     Note over A: already running — started by hand, in another terminal
     U->>O: POST /agui/run — threadId = contextId, messages
     O->>C: resolve agent name → card_url
     O->>A: A2A message/stream, JSON-RPC over SSE
-    A-->>O: task → statusUpdate working → artifactUpdate → statusUpdate completed
-    O-->>U: SSE of AG-UI events — RUN_STARTED, TEXT_MESSAGE_*, TOOL_CALL_*, RUN_FINISHED
+    A-->>O: task → working → artifactUpdate → completed
+    O-->>U: SSE of AG-UI events<br/>RUN_STARTED, TEXT_MESSAGE_*, TOOL_CALL_*, RUN_FINISHED
 ```
 
 There is no start step. The agent's existence is a precondition, and `catalog.yaml` maps a
@@ -2594,6 +2594,7 @@ flowchart TB
         O2["orch-serve"] -- "A2A dials normally" --> TS["Tailscale / VPN address"]
         TS --> A2["a2acode serve<br/>remote machine"]
     end
+    opt1 ~~~ opt2
 ```
 
 Option 1 keeps A2A's vocabulary while inverting who dials, and the index at `GET /` is
