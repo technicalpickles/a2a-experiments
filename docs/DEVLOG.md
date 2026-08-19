@@ -2159,3 +2159,153 @@ own; A is the integration that earns its keep in both directions. B is a trap.
 34 packages — is precisely what DESIGN-v3 deliberately is not building. Read its feature
 list as a menu of what daily-driver use eventually demands, not as a backlog. The
 transferable content is the invariants, not the inventory.
+
+## 2026-08-19 — how bb models repos and agents, and what that says about running a2acode
+
+Follow-up to the survey above, aimed at the gap Josh named: `real-agents` has a sketch for
+the spawn provider ("tracks the process in the database — worktree, pid, port, health, last
+activity") and no real story. bb has a shipped one, and its central move is the opposite of
+that sketch.
+
+### The five nouns
+
+- **Host** — a machine *identity*, not a connection. Long-lived row carrying
+  `maxPermissionMode` (a per-machine ceiling no thread's permission mode may exceed),
+  `lastSeenAt`, and `lastRejectedProtocolVersion` (the daemon that connected too old, which
+  is what triggers its self-update).
+- **Host daemon session** — the *connection*, a separate table, held by **lease**:
+  `instanceId`, `protocolVersion`, `heartbeatIntervalMs`, `leaseTimeoutMs`,
+  `leaseExpiresAt`, `status`, `closeReason`. Liveness is a lease the daemon renews, not a
+  ping the server sends. Identity and connection being different rows is what lets a host
+  exist while nothing is running on it.
+- **Project** — the repo as a concept. Has a `gitRemoteUrl` and **no path**.
+- **Project source** — where the code actually is: `(projectId, hostId, path)`, unique per
+  project-and-host, at most one default. A project can map to paths on several machines.
+- **Environment** — the execution context: unique on `(projectId, hostId, path)`, plus
+  `managed`, `isGitRepo`, `isWorktree`, `branchName` / `baseBranch` / `defaultBranch` /
+  `mergeBaseBranch`, `workspaceProvisionType` (`unmanaged` | `managed-worktree` |
+  `personal`), the six-state `status`, `destroyAttemptId`, and `retireRequestedAt`. The
+  unique index comment is the modeling decision stated outright: "A workspace path is
+  claimed per project, not globally. Two projects may point at the same folder; each gets
+  its own environment for it."
+
+**Thread** then carries `environmentId` (nullable, `set null` on delete), `providerId`,
+`parentThreadId`, `visibility`, and sticky per-thread execution overrides. Cardinality:
+threads N:1 environment, environment 1:1 workspace path.
+
+The split we don't have is **project / source / environment**: repo identity is separate
+from any particular checkout of it, which is separate from a workspace an agent runs in.
+`catalog.yaml` collapses all three into name → `card_url`, which is fine for the rig and
+wrong the moment a mission wants its own worktree of a repo that also exists elsewhere.
+
+### The move: bb does not model the process at all
+
+There is no process table. Nothing durable records a pid, a port, or a health state. The
+running provider process lives in an in-memory pool inside the runtime, and what persists
+is the **session handle** — `providerThreadId`, the provider's own resume id — plus enough
+config to reconstruct the launch. The rule, stated as a rule:
+
+> Persist the resume handle, not the process. Make process identity a pure function of its
+> launch inputs. Reap freely; restore on demand.
+
+That inverts our sketch. pid/port/health are not durable facts — they are observations that
+go stale at every crash, and storing them buys a reconciliation problem. Three mechanisms
+carry the weight instead.
+
+**1. A process key that is a fingerprint of the launch inputs.** `bridgeLaunchProcessKey`
+is the artifact digest (or `bundled:<id>`) plus a stable-JSON SHA-256 of the capabilities;
+ACP appends `#acp:<fingerprint of the launch spec>` over command, args, env, and model CLI.
+Stable JSON means keys sorted, `undefined` dropped, applied recursively. The comment on it
+is the lesson: capabilities come from the plugin's *declaration*, not its bundle, so
+editing a declaration changes behavior while the artifact hash stays put — "without them in
+the key the next thread reuses an adapter built from the superseded declaration."
+
+Our analogue is direct: key an a2acode process on `(worktree path, backend, permission
+mode, a2acode version, env allowlist, …)`. Change any input and the next dispatch gets a
+new process automatically, because it asks for a key that no live process has. Nobody has
+to remember to restart anything, and there is no "is the running one still correct?" check
+to forget.
+
+**2. Config rides every command; the supervisor never diffs.** `provider-catalog.ts` opens
+by saying how little is left in it: "Provider metadata is declared server-side by plugins
+and rides every bridge-bound command on `bridgeLaunch`, so almost nothing belongs here."
+The protocol doc says the same for the per-turn half — "Execution options ride every
+command. The bridge reconciles them internally; the runtime never diffs." Level-triggered
+config, so supervisor and supervised cannot drift.
+
+**3. Reaping is a named precondition list, and restorability is one of the preconditions.**
+`findReapableIdleProviderSession` releases an idle session only when: no in-flight
+operation for the thread, no pending turn start, no active turn, `sessionRestorable` is
+true *for this session*, a `providerThreadId` exists to resume from, and it has been idle
+at least `idleForMs`. On top of that sits the level-triggered `thread/openWork` — a bridge
+declares work bb cannot see (a provider's native subagents, reported as tool calls) and the
+runtime refuses to reap while it is open; a bridge that never sends it reads as no open
+work, and one that forgets to retract it blocks reaping forever. The protocol doc names the
+cost of getting this wrong: "how an idle-looking thread gets its parent process stopped out
+from under a running child agent." And `sessionRestorable` is re-reported by every
+replacement session, because "a stale `true` lets the idle sweep release a session that
+cannot come back."
+
+**That last precondition is a question we cannot currently answer, and it gates the whole
+design: can an a2acode session be resumed after its process dies?** If the Claude session
+survives as a resumable handle, an idle a2acode is free to kill and the reaper is easy. If
+it does not, killing an idle process destroys the conversation and there must be no reaper
+at all — only explicit teardown. This belongs next to the already-open probe about whether
+a2acode serializes concurrent tasks in one process; both should be answered empirically
+before `real-agents` designs around either.
+
+### Reaping the workspace is a different question, refcount-shaped
+
+Environment cleanup is separate from session reaping and gated on: `managed`, zero live
+threads in the environment, no pending thread shutdowns, and past an **archive grace
+window**. The window exists so a freshly retired managed worktree "stays revivable
+(worktree intact, undoable via unarchive → `retire.cancelled`)" — an accidental archive is
+losslessly undoable, and `retireRequestedAt` is stamped by the lifecycle event so unrelated
+metadata churn cannot move the clock. It applies only while a revivable archived thread
+still exists; an environment stranded by a deleted thread is cleaned immediately. The
+`destroyAttemptId` / `matchingDestroyAttempt` predicate keeps a late destroy result from
+settling a newer attempt.
+
+So the model has two independent reclaim loops with different triggers: **sessions** reap
+on idleness (and are cheap to lose, because they restore), **workspaces** reap on refcount
+(and are expensive to lose, hence the grace window).
+
+### Concurrency: a queued lock on the path, not an advisory lease
+
+Our open question — how a session declares read vs. write intent, what happens when a
+reader turns out to need the lease — bb answers by not asking. `withCheckoutMutationAdmission`
+takes a process-local **queued** lock keyed by the resolved checkout path; mutations
+serialize by waiting, everything else runs unblocked. It cannot be wrong about intent
+because it wraps the actual mutation rather than a declaration about one. For the
+*multi-agent* case (`plugins/tasks/WORKERS.md`) the answer is a written path-ownership
+protocol in the brief, not machinery. Both are cheaper than the lease model in the spec and
+worth weighing before building it.
+
+### Provisioning is a transcript, and it reconnects
+
+`createWorktree` streams typed `step` entries into a provisioning transcript the app shows.
+Include-file copy failures report into the transcript without failing provisioning; a
+setup-script failure does fail it, and the thread never starts. Transcript entries cap how
+many paths one entry names, because "a broad pattern can match thousands of files, and the
+daemon keeps and forwards the whole transcript." And `reconnectManagedWorktree` re-opens an
+existing managed workspace after a restart instead of re-provisioning it — provisioning is
+idempotent by having a distinct reconnect path, not by being re-run.
+
+### What this argues for in our model
+
+1. **Split repo from checkout from workspace.** `catalog.yaml`'s name → `card_url` is one
+   implementation of the last arrow only; the missing middle is (mission, repo) → worktree.
+2. **Delete pid/port/health from the process-registry sketch.** Persist (mission, repo) →
+   worktree, and the a2acode `contextId`. Endpoint resolution becomes a function that
+   starts a process when none is live for the key.
+3. **Add a process key** fingerprinting the launch inputs; reuse only on exact match.
+4. **Write the reap gate as named preconditions**, with session restorability among them —
+   and probe restorability before designing the reaper.
+5. **Give worktree destruction a grace window and a destroy-attempt id.**
+6. **Try a path-keyed queued lock** before building the advisory writer lease.
+7. **Make the provisioning transcript a first-class artifact** the cockpit renders, with
+   bb's include/setup contract copied wholesale.
+8. **A per-repo or per-worktree permission ceiling**, mirroring `hosts.maxPermissionMode` —
+   a bound on what any approval policy may auto-allow there, independent of the agent.
+
+None of this is decided; it is the input to a `real-agents` spec that does not exist yet.
